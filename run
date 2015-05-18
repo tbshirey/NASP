@@ -1,4 +1,5 @@
 #!/bin/bash
+#set -e
 
 mkdir {profiles,svg} || true
 
@@ -20,11 +21,16 @@ mv $CPU_PROFILE $BASE_CPU_PROFILE
 mv $MEM_PROFILE $BASE_MEM_PROFILE
 
 go build && ./nasp --reference benchmarks/Ecoli/reference.fasta benchmarks/Ecoli/external/*.frankenfasta
-go tool pprof -svg nasp cpu.profile > $CPU_SVG
-go tool pprof -svg nasp mem.profile > $MEM_SVG
+if [ $? -ne 0  ]; then
+    exit 1
+fi
+
+go tool pprof -svg nasp $CPU_PROFILE > $CPU_SVG
+go tool pprof -svg nasp $MEM_PROFILE > $MEM_SVG
 go tool pprof -base $BASE_CPU_PROFILE -svg nasp $CPU_PROFILE > $DIFF_CPU_SVG
 go tool pprof -base $BASE_MEM_PROFILE -svg nasp $MEM_PROFILE > $DIFF_MEM_SVG
 
-open $CPU_SVG $MEM_SVG $DIFF_CPU_SVG $DIFF_MEM_SVG
+#open $CPU_SVG $MEM_SVG $BASE_CPU_PROFILE $BASE_MEM_PROFILE
+open $CPU_SVG $MEM_SVG
 
 

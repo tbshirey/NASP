@@ -11,9 +11,12 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strings"
+	"time"
 	"unicode"
 )
 
+//var c uint64
+var c_contig uint64
 var refPath = flag.String("reference", "", "Path to the reference fasta against which samples are compared")
 var dupPath = flag.String("duplicates", "", "Path to the duplicates file marking possible duplicated positions")
 
@@ -46,12 +49,50 @@ func main() {
 		log.Println("Warning: Expected the command to include a list or glob pattern of sample files.")
 	}
 
+	t0 := time.Now()
+
 	// TODO: Sort analyses by Identifier
 	analyses := NewSampleAnalyses(flag.Args()...)
+	//fmt.Println(analyses)
+
+	fmt.Println("NewSampleAnalyses", time.Now().Sub(t0))
+
+	positions := make([]chan *Position, len(flag.Args()))
 
 	for _, contig := range analyses[0].(*Fasta).Contigs() {
-		fmt.Println(contig)
+
+		//fmt.Println("Loading", contig, time.Now().Sub(t0))
+
+		done := make(chan struct{})
+		for i, analysis := range analyses {
+			positions[i] = analysis.Contig(done, contig)
+		}
+
+		c_contig++
+		fmt.Println(c_contig, "Scanning", contig, time.Now().Sub(t0))
+
+		for {
+			isAllEmpty := true
+			for _, position := range positions {
+				c := <-position
+				//fmt.Printf("%c", c.Call)
+				if c.Call != 'X' {
+					isAllEmpty = false
+				}
+			}
+			//fmt.Println()
+			if isAllEmpty {
+				close(done)
+				for _, position := range positions {
+					<-position
+				}
+				break
+			}
+		}
+		//break
 	}
+
+	fmt.Println("range Contigs", time.Now().Sub(t0))
 
 	/*
 		fmt.Println(len(analyses))
@@ -84,7 +125,7 @@ func NewSampleAnalyses(filepaths ...string) SampleAnalyses {
 	ch := make(chan SampleAnalysis, len(flag.Args()))
 	defer close(ch)
 	for _, path := range filepaths {
-		go func(ch chan SampleAnalysis) {
+		go func(ch chan SampleAnalysis, path string) {
 			switch {
 			default:
 				log.Fatal("Unknown sample analysis: " + path)
@@ -96,7 +137,7 @@ func NewSampleAnalyses(filepaths ...string) SampleAnalyses {
 				//	ch <- NewVcf(path)
 			}
 			return
-		}(ch)
+		}(ch, path)
 	}
 
 	for i := range analyses {
@@ -141,44 +182,81 @@ func (f Fasta) Contigs() []string {
 	return keys
 }
 
+func (f Fasta) emptyContig(done chan struct{}, ch chan *Position) {
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			ch <- &Position{
+				Call:       'X',
+				Coverage:   -1,
+				Proportion: -1.0,
+			}
+		}
+	}
+}
+
 func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 	ch := make(chan *Position)
 	go func(ch chan *Position) {
 		filePosition, ok := f.contigs[name]
 		if !ok {
 			// TODO: empty contig
-			log.Fatal(f.path + " does not contain " + name)
+			//log.Println(f.path + " missing contig " + name)
+			f.emptyContig(done, ch)
+			close(ch)
+			//fmt.Println(f.path, name, "shutting down")
+			return
 		}
+
+		//c += 1
+		//fmt.Println(c, "Open", f.path)
 		file, err := os.Open(f.path)
 		if err != nil {
 			log.Fatal(err)
 		}
+		defer file.Close()
+
 		_, err = file.Seek(int64(filePosition), os.SEEK_SET)
 		if err != nil {
 			log.Fatal(err)
 		}
 		br := bufio.NewReader(file)
 		for err != io.EOF {
-			b, err := br.ReadByte()
-			if err == io.EOF {
-				fmt.Println("FOOBAR: EOF")
-				break
-			} else if err != nil {
-				log.Fatal(err)
-			}
-			if unicode.IsSpace(rune(b)) {
-				continue
-			}
-			if b == '>' {
-				break
-			}
-			ch <- &Position{
-				Call:       unicode.ToUpper(rune(b)),
-				Coverage:   -1,
-				Proportion: -1.0,
+			select {
+			case <-done:
+				//fmt.Println(f.path, name, "shutting down")
+				close(ch)
+				return
+			default:
+				b, err := br.ReadByte()
+				if err == io.EOF {
+					fmt.Println("FOOBAR: EOF")
+					fmt.Println(f.path, name, "EOF shutting down")
+					log.Fatal("FOOBAR: EOF")
+					//break
+				} else if err != nil {
+					log.Fatal(err)
+				}
+				if unicode.IsSpace(rune(b)) {
+					continue
+				}
+				if b == '>' {
+					//fmt.Println(f.path, name, "New Contig")
+					f.emptyContig(done, ch)
+					close(ch)
+					return
+				}
+				ch <- &Position{
+					Call:       unicode.ToUpper(rune(b)),
+					Coverage:   -1,
+					Proportion: -1.0,
+				}
 			}
 		}
-		// TODO: Yield empty positions
+		//f.emptyContig(done, ch)
+		return
 	}(ch)
 	return ch
 }
@@ -191,6 +269,8 @@ func (f Fasta) index() {
 	var err error
 	var position uint
 
+	//c += 1
+	//fmt.Println(c, "Fasta.index Open", f.path)
 	file, err := os.Open(f.path)
 	if err != nil {
 		log.Fatal(err)
