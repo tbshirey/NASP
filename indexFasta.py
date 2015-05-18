@@ -10,8 +10,9 @@ def printContigs(filepath):
                 #print('{0}: {1}'.format(os.path.basename(filepath), line))
 
 def main():
-    for x in map(printContigs, glob.glob("./benchmarks/Ecoli/external/*.frankenfasta")):
-        pass
+    with ProcessPoolExecutor() as executor:
+        for x in executor.map(printContigs, glob.glob("./benchmarks/Ecoli/external/*.frankenfasta")):
+            pass
 
 #timeit.timeit(stmt='pass', setup='pass', timer=<default timer>, number=1000000)
 

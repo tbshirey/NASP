@@ -76,13 +76,16 @@ func main() {
 	var r rune
 	var name string
 	done := make(chan struct{})
+	var l int
 	for {
 		b, err = br.ReadByte()
 		if err == io.EOF {
 			close(done)
 			for _, p := range positions {
-				close(p)
+				<-p
+				//close(p)
 			}
+			fmt.Println(" Length:", l)
 			os.Exit(0)
 		}
 		if err != nil {
@@ -93,11 +96,13 @@ func main() {
 		default:
 			log.Fatalf("Unexpected character in reference fasta: %c\n", r)
 		case unicode.IsLetter(r):
+			l++
 			for _, position := range positions {
 				<-position
 				//p := <-position
 				//fmt.Printf("%c", p.Call)
 			}
+			//fmt.Println()
 		case unicode.IsSpace(r):
 			continue
 		case r == '>':
@@ -114,8 +119,10 @@ func main() {
 				name = string(line[:idx])
 			}
 
+			fmt.Println(" Length:", l)
+			l = 0
 			c_contig++
-			fmt.Println(c_contig, "Scanning", name, time.Now().Sub(t0))
+			fmt.Print(c_contig, " Scanning ", name, " ", time.Now().Sub(t0))
 
 			close(done)
 			done = make(chan struct{})
@@ -128,46 +135,10 @@ func main() {
 		}
 
 	}
-
-	/*
-		for _, contig := range analyses[0].(*Fasta).Contigs() {
-
-			//fmt.Println("Loading", contig, time.Now().Sub(t0))
-
-			done := make(chan struct{})
-			for i, analysis := range analyses {
-				positions[i] = analysis.Contig(done, contig)
-			}
-
-			c_contig++
-			fmt.Println(c_contig, "Scanning", contig, time.Now().Sub(t0))
-
-			for {
-				isAllEmpty := true
-				for _, position := range positions {
-					c := <-position
-					//fmt.Printf("%c", c.Call)
-					if c.Call != 'X' {
-						isAllEmpty = false
-					}
-				}
-				//fmt.Println()
-				if isAllEmpty {
-					close(done)
-					for _, position := range positions {
-						<-position
-					}
-					break
-				}
-			}
-			//break
-		}
-
-		fmt.Println("range Contigs", time.Now().Sub(t0))
-	*/
-
 }
 
+// SampleAnalyses implements sort.Interface for []SampleAnalysis based on
+// the identifier field.
 type SampleAnalyses []SampleAnalysis
 
 func (s SampleAnalyses) Len() int {
@@ -269,7 +240,7 @@ func (f Fasta) emptyContig(done chan struct{}, ch chan *Position) {
 }
 
 func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
-	ch := make(chan *Position)
+	ch := make(chan *Position, 500)
 	go func(ch chan *Position) {
 		var err error
 		var b byte
