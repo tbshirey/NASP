@@ -20,7 +20,7 @@ BASE_MEM_PROFILE=profiles/mem_${SHA1}
 mv $CPU_PROFILE $BASE_CPU_PROFILE
 mv $MEM_PROFILE $BASE_MEM_PROFILE
 
-go build && ./nasp --reference benchmarks/Ecoli/reference.fasta benchmarks/Ecoli/external/*.frankenfasta
+go build && ./nasp --reference benchmarks/Ecoli/reference.fasta --duplicates /scratch/jsahl/genomes/Ecoli/255_genomes/BSR/nasp_J_2/reference/duplicates.txt benchmarks/Ecoli/external/*.frankenfasta
 if [ $? -ne 0  ]; then
     exit 1
 fi

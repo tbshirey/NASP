@@ -20,6 +20,12 @@ var c_contig uint64
 var refPath = flag.String("reference", "", "Path to the reference fasta against which samples are compared")
 var dupPath = flag.String("duplicates", "", "Path to the duplicates file marking possible duplicated positions")
 
+var EMPTY_FASTA_POSITION = &Position{
+	Call:       'X',
+	Coverage:   -1,
+	Proportion: -1.0,
+}
+
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
@@ -51,6 +57,7 @@ func main() {
 
 	t0 := time.Now()
 
+	//reference := NewSampleAnalyses(*refPath, *dupPath)
 	// TODO: Sort analyses by Identifier
 	analyses := NewSampleAnalyses(flag.Args()...)
 	//fmt.Println(analyses)
@@ -59,46 +66,104 @@ func main() {
 
 	positions := make([]chan *Position, len(flag.Args()))
 
-	for _, contig := range analyses[0].(*Fasta).Contigs() {
+	file, err := os.Open(*refPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	br := bufio.NewReader(file)
 
-		//fmt.Println("Loading", contig, time.Now().Sub(t0))
-
-		done := make(chan struct{})
-		for i, analysis := range analyses {
-			positions[i] = analysis.Contig(done, contig)
+	var b byte
+	var r rune
+	var name string
+	done := make(chan struct{})
+	for {
+		b, err = br.ReadByte()
+		if err == io.EOF {
+			close(done)
+			for _, p := range positions {
+				close(p)
+			}
+			os.Exit(0)
 		}
-
-		c_contig++
-		fmt.Println(c_contig, "Scanning", contig, time.Now().Sub(t0))
-
-		for {
-			isAllEmpty := true
+		if err != nil {
+			log.Fatal(err)
+		}
+		r = unicode.ToUpper(rune(b))
+		switch {
+		default:
+			log.Fatalf("Unexpected character in reference fasta: %c\n", r)
+		case unicode.IsLetter(r):
 			for _, position := range positions {
-				c := <-position
-				//fmt.Printf("%c", c.Call)
-				if c.Call != 'X' {
-					isAllEmpty = false
-				}
+				<-position
+				//p := <-position
+				//fmt.Printf("%c", p.Call)
 			}
-			//fmt.Println()
-			if isAllEmpty {
-				close(done)
-				for _, position := range positions {
-					<-position
+		case unicode.IsSpace(r):
+			continue
+		case r == '>':
+			line, err := br.ReadSlice('\n')
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			//line = bytes.TrimPrefix(line, []byte("franken::"))
+
+			if idx := bytes.IndexAny(line, " \n"); idx < 0 {
+				name = string(line)
+			} else {
+				name = string(line[:idx])
+			}
+
+			c_contig++
+			fmt.Println(c_contig, "Scanning", name, time.Now().Sub(t0))
+
+			close(done)
+			done = make(chan struct{})
+			for i, analysis := range analyses {
+				if positions[i] != nil {
+					<-positions[i]
 				}
-				break
+				positions[i] = analysis.Contig(done, name)
 			}
 		}
-		//break
+
 	}
 
-	fmt.Println("range Contigs", time.Now().Sub(t0))
-
 	/*
-		fmt.Println(len(analyses))
-		done := make(chan struct{})
-		for p := range analyses[0].Contig(done, "centroid_100028") {
-			fmt.Println(p)
+		for _, contig := range analyses[0].(*Fasta).Contigs() {
+
+			//fmt.Println("Loading", contig, time.Now().Sub(t0))
+
+			done := make(chan struct{})
+			for i, analysis := range analyses {
+				positions[i] = analysis.Contig(done, contig)
+			}
+
+			c_contig++
+			fmt.Println(c_contig, "Scanning", contig, time.Now().Sub(t0))
+
+			for {
+				isAllEmpty := true
+				for _, position := range positions {
+					c := <-position
+					//fmt.Printf("%c", c.Call)
+					if c.Call != 'X' {
+						isAllEmpty = false
+					}
+				}
+				//fmt.Println()
+				if isAllEmpty {
+					close(done)
+					for _, position := range positions {
+						<-position
+					}
+					break
+				}
+			}
+			//break
+		}
+
+		fmt.Println("range Contigs", time.Now().Sub(t0))
 	*/
 
 }
@@ -160,13 +225,23 @@ type Position struct {
 type Fasta struct {
 	path    string
 	contigs map[string]uint
+	rd      *os.File
+	br      *bufio.Reader
 }
 
 func NewFasta(path string) *Fasta {
+	file, err := os.Open(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	fasta := &Fasta{
 		path:    path,
 		contigs: make(map[string]uint),
+		rd:      file,
+		br:      bufio.NewReader(file),
 	}
+
 	fasta.index()
 	return fasta
 }
@@ -188,11 +263,7 @@ func (f Fasta) emptyContig(done chan struct{}, ch chan *Position) {
 		case <-done:
 			return
 		default:
-			ch <- &Position{
-				Call:       'X',
-				Coverage:   -1,
-				Proportion: -1.0,
-			}
+			ch <- EMPTY_FASTA_POSITION
 		}
 	}
 }
@@ -200,6 +271,8 @@ func (f Fasta) emptyContig(done chan struct{}, ch chan *Position) {
 func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 	ch := make(chan *Position)
 	go func(ch chan *Position) {
+		var err error
+		var b byte
 		filePosition, ok := f.contigs[name]
 		if !ok {
 			// TODO: empty contig
@@ -210,19 +283,11 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 			return
 		}
 
-		//c += 1
-		//fmt.Println(c, "Open", f.path)
-		file, err := os.Open(f.path)
+		_, err = f.rd.Seek(int64(filePosition), os.SEEK_SET)
 		if err != nil {
 			log.Fatal(err)
 		}
-		defer file.Close()
-
-		_, err = file.Seek(int64(filePosition), os.SEEK_SET)
-		if err != nil {
-			log.Fatal(err)
-		}
-		br := bufio.NewReader(file)
+		f.br.Reset(f.rd)
 		for err != io.EOF {
 			select {
 			case <-done:
@@ -230,7 +295,7 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 				close(ch)
 				return
 			default:
-				b, err := br.ReadByte()
+				b, err = f.br.ReadByte()
 				if err == io.EOF {
 					fmt.Println("FOOBAR: EOF")
 					fmt.Println(f.path, name, "EOF shutting down")
@@ -255,7 +320,7 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 				}
 			}
 		}
-		//f.emptyContig(done, ch)
+		// TODO: Remove?
 		return
 	}(ch)
 	return ch
@@ -269,17 +334,8 @@ func (f Fasta) index() {
 	var err error
 	var position uint
 
-	//c += 1
-	//fmt.Println(c, "Fasta.index Open", f.path)
-	file, err := os.Open(f.path)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-
-	br := bufio.NewReader(file)
 	for err != io.EOF {
-		line, err = br.ReadSlice('>')
+		line, err = f.br.ReadSlice('>')
 		switch err {
 		default:
 			log.Fatal(err)
@@ -287,7 +343,7 @@ func (f Fasta) index() {
 			break
 		case nil:
 			position += uint(len(line))
-			line, err = br.ReadBytes('\n')
+			line, err = f.br.ReadBytes('\n')
 			if err != nil {
 				log.Fatal(err)
 			}
