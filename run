@@ -1,0 +1,30 @@
+#!/bin/bash
+
+mkdir {profiles,svg} || true
+
+DATE=$(date +%y%m%d%H%M)
+SHA1=$(git rev-parse --short HEAD)
+
+CPU_SVG=svg/cpu_${DATE}_${SHA1}.svg
+MEM_SVG=svg/mem_${DATE}_${SHA1}.svg
+DIFF_CPU_SVG=svg/cpudiff_${DATE}_${SHA1}.svg
+DIFF_MEM_SVG=svg/memdiff_${DATE}_${SHA1}.svg
+
+# Save previous profiles for comparison
+CPU_PROFILE=cpu.profile
+MEM_PROFILE=mem.profile
+BASE_CPU_PROFILE=profiles/cpu_${SHA1}
+BASE_MEM_PROFILE=profiles/mem_${SHA1}
+
+mv $CPU_PROFILE $BASE_CPU_PROFILE
+mv $MEM_PROFILE $BASE_MEM_PROFILE
+
+go build && ./nasp --reference benchmarks/Ecoli/reference.fasta benchmarks/Ecoli/external/*.frankenfasta
+go tool pprof -svg nasp cpu.profile > $CPU_SVG
+go tool pprof -svg nasp mem.profile > $MEM_SVG
+go tool pprof -base $BASE_CPU_PROFILE -svg nasp $CPU_PROFILE > $DIFF_CPU_SVG
+go tool pprof -base $BASE_MEM_PROFILE -svg nasp $MEM_PROFILE > $DIFF_MEM_SVG
+
+open $CPU_SVG $MEM_SVG $DIFF_CPU_SVG $DIFF_MEM_SVG
+
+
