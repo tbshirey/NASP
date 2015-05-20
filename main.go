@@ -57,10 +57,8 @@ func main() {
 
 	t0 := time.Now()
 
-	//reference := NewSampleAnalyses(*refPath, *dupPath)
 	// TODO: Sort analyses by Identifier
 	analyses := NewSampleAnalyses(flag.Args()...)
-	//fmt.Println(analyses)
 
 	fmt.Println("NewSampleAnalyses", time.Now().Sub(t0))
 
@@ -81,10 +79,6 @@ func main() {
 		b, err = br.ReadByte()
 		if err == io.EOF {
 			close(done)
-			for _, p := range positions {
-				<-p
-				//close(p)
-			}
 			fmt.Println(" Length:", l)
 			os.Exit(0)
 		}
@@ -99,10 +93,7 @@ func main() {
 			l++
 			for _, position := range positions {
 				<-position
-				//p := <-position
-				//fmt.Printf("%c", p.Call)
 			}
-			//fmt.Println()
 		case unicode.IsSpace(r):
 			continue
 		case r == '>':
@@ -246,11 +237,7 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 		var b byte
 		filePosition, ok := f.contigs[name]
 		if !ok {
-			// TODO: empty contig
-			//log.Println(f.path + " missing contig " + name)
 			f.emptyContig(done, ch)
-			close(ch)
-			//fmt.Println(f.path, name, "shutting down")
 			return
 		}
 
@@ -258,30 +245,22 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 		if err != nil {
 			log.Fatal(err)
 		}
+
 		f.br.Reset(f.rd)
 		for err != io.EOF {
 			select {
 			case <-done:
-				//fmt.Println(f.path, name, "shutting down")
-				close(ch)
 				return
 			default:
 				b, err = f.br.ReadByte()
-				if err == io.EOF {
-					fmt.Println("FOOBAR: EOF")
-					fmt.Println(f.path, name, "EOF shutting down")
-					log.Fatal("FOOBAR: EOF")
-					//break
-				} else if err != nil {
+				if err != nil {
 					log.Fatal(err)
 				}
 				if unicode.IsSpace(rune(b)) {
 					continue
 				}
 				if b == '>' {
-					//fmt.Println(f.path, name, "New Contig")
 					f.emptyContig(done, ch)
-					close(ch)
 					return
 				}
 				ch <- &Position{
@@ -291,9 +270,8 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 				}
 			}
 		}
-		// TODO: Remove?
-		return
 	}(ch)
+
 	return ch
 }
 
