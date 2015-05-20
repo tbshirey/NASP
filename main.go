@@ -62,7 +62,7 @@ func main() {
 
 	fmt.Println("NewSampleAnalyses", time.Now().Sub(t0))
 
-	//positions := make([]chan *Position, len(flag.Args()))
+	positions := make([]chan *Position, len(flag.Args()))
 
 	file, err := os.Open(*refPath)
 	if err != nil {
@@ -91,11 +91,9 @@ func main() {
 			log.Fatalf("Unexpected character in reference fasta: %c\n", r)
 		case unicode.IsLetter(r):
 			l++
-			/*
-				for _, position := range positions {
-					<-position
-				}
-			*/
+			for _, position := range positions {
+				<-position
+			}
 		case unicode.IsSpace(r):
 			continue
 		case r == '>':
@@ -120,11 +118,9 @@ func main() {
 
 			close(done)
 			done = make(chan struct{})
-			/*
-				for i, analysis := range analyses {
-					positions[i] = analysis.Contig(done, name)
-				}
-			*/
+			for i, analysis := range analyses {
+				positions[i] = analysis.Contig(done, name)
+			}
 		}
 
 	}
@@ -235,7 +231,8 @@ func (f Fasta) emptyContig(done chan struct{}, ch chan *Position) {
 
 func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 	ch := make(chan *Position, 500)
-	go func(ch chan *Position) {
+	go func(done chan struct{}, ch chan *Position) {
+		defer close(ch)
 		var err error
 		var b byte
 		filePosition, ok := f.contigs[name]
@@ -266,16 +263,14 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 					//f.emptyContig(done, ch)
 					return
 				}
-				/*
-					ch <- &Position{
-						Call:       unicode.ToUpper(rune(b)),
-						Coverage:   -1,
-						Proportion: -1.0,
-					}
-				*/
+				ch <- &Position{
+					Call:       unicode.ToUpper(rune(b)),
+					Coverage:   -1,
+					Proportion: -1.0,
+				}
 			}
 		}
-	}(ch)
+	}(done, ch)
 
 	return ch
 }
