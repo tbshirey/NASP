@@ -9,10 +9,11 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"runtime/pprof"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/davecheney/profile"
 )
 
 //var c uint64
@@ -29,20 +30,18 @@ var EMPTY_FASTA_POSITION = &Position{
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	cprof, err := os.Create("cpu.profile")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer cprof.Close()
-	pprof.StartCPUProfile(cprof)
-	defer pprof.StopCPUProfile()
+	defer profile.Start(&profile.Config{
+		//	CPUProfile:   true,
+		MemProfile:   true,
+		BlockProfile: true,
+		ProfilePath:  ".",
+		//NoShutdownHook: true,
+	}).Stop()
 
-	mprof, err := os.Create("mem.profile")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer mprof.Close()
-	defer pprof.WriteHeapProfile(mprof)
+	t0 := time.Now()
+	defer func() {
+		fmt.Println(time.Now().Sub(t0))
+	}()
 
 	flag.Parse()
 
@@ -55,14 +54,15 @@ func main() {
 		log.Println("Warning: Expected the command to include a list or glob pattern of sample files.")
 	}
 
-	t0 := time.Now()
+	fmt.Println("Indexing all samples", time.Now().Sub(t0))
 
 	// TODO: Sort analyses by Identifier
 	analyses := NewSampleAnalyses(flag.Args()...)
+	fmt.Println(analyses)
 
 	fmt.Println("NewSampleAnalyses", time.Now().Sub(t0))
 
-	positions := make([]chan *Position, len(flag.Args()))
+	//positions := make([]chan *Position, len(flag.Args()))
 
 	file, err := os.Open(*refPath)
 	if err != nil {
@@ -80,7 +80,7 @@ func main() {
 		if err == io.EOF {
 			close(done)
 			fmt.Println(" Length:", l)
-			os.Exit(0)
+			return
 		}
 		if err != nil {
 			log.Fatal(err)
@@ -91,9 +91,11 @@ func main() {
 			log.Fatalf("Unexpected character in reference fasta: %c\n", r)
 		case unicode.IsLetter(r):
 			l++
-			for _, position := range positions {
-				<-position
-			}
+			/*
+				for _, position := range positions {
+					<-position
+				}
+			*/
 		case unicode.IsSpace(r):
 			continue
 		case r == '>':
@@ -113,19 +115,20 @@ func main() {
 			fmt.Println(" Length:", l)
 			l = 0
 			c_contig++
-			fmt.Print(c_contig, " Scanning ", name, " ", time.Now().Sub(t0))
+			t := time.Now().Sub(t0)
+			fmt.Print(c_contig /*c_contig/(uint64(t/time.Second)),*/, " Scanning ", name, " ", t)
 
 			close(done)
 			done = make(chan struct{})
-			for i, analysis := range analyses {
-				if positions[i] != nil {
-					<-positions[i]
+			/*
+				for i, analysis := range analyses {
+					positions[i] = analysis.Contig(done, name)
 				}
-				positions[i] = analysis.Contig(done, name)
-			}
+			*/
 		}
 
 	}
+	fmt.Println("Done")
 }
 
 // SampleAnalyses implements sort.Interface for []SampleAnalysis based on
@@ -237,7 +240,7 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 		var b byte
 		filePosition, ok := f.contigs[name]
 		if !ok {
-			f.emptyContig(done, ch)
+			//f.emptyContig(done, ch)
 			return
 		}
 
@@ -260,14 +263,16 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 					continue
 				}
 				if b == '>' {
-					f.emptyContig(done, ch)
+					//f.emptyContig(done, ch)
 					return
 				}
-				ch <- &Position{
-					Call:       unicode.ToUpper(rune(b)),
-					Coverage:   -1,
-					Proportion: -1.0,
-				}
+				/*
+					ch <- &Position{
+						Call:       unicode.ToUpper(rune(b)),
+						Coverage:   -1,
+						Proportion: -1.0,
+					}
+				*/
 			}
 		}
 	}(ch)
