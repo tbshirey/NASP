@@ -66,8 +66,11 @@ func main() {
 	ch := make(chan []byte, 100)
 	d := make(chan struct{})
 	defer func() {
+		log.Println("Close call string channel")
 		close(ch)
+		log.Println("Wait for all write goroutines to shutdown")
 		<-d
+		log.Println("Write goroutines acknowledged shutdown")
 	}()
 	go func(done chan struct{}, ch chan []byte, numSamples int) {
 		/*
@@ -103,16 +106,17 @@ func main() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt)
 
-		//var buf bytes.Buffer
+		var buf bytes.Buffer
 		//callStr := make([]byte, numSamples)
 		//var ok bool
 		file, err := os.Create("master.tsv.gz")
 		if err != nil {
 			log.Fatal(err)
 		}
+		// Compressed Writer
 		cw := gzip.NewWriter(file)
 		defer func() {
-			log.Println("Write goroutine shutting down")
+			log.Println("master.tsv.gz goroutine shutting down")
 			if err := cw.Close(); err != nil {
 				log.Fatal(err)
 			}
@@ -130,14 +134,11 @@ func main() {
 				if !ok {
 					return
 				}
-				if _, err = cw.Write([]byte(string(callStr))); err != nil {
+				buf.Reset()
+				buf.Write(callStr)
+				if _, err = buf.WriteTo(cw); err != nil {
 					log.Fatal(err)
 				}
-				/*
-					if _, err = cw.Write([]byte("LocusID\tReference\t#SNPcall\t#Indelcall\t#Refcall\t#CallWasMade\t#PassedDepthFilter\t#PassedProportionFilter\t#A\t#C\t#G\t#T\t#Indel\t#NXdegen\tContig\tPosition\tInDupRegion\tSampleConsensus\tCallWasMade\tPassedDepthFilter\tPassedProportionFilter\tPattern\n")); err != nil {
-						log.Fatal(err)
-					}
-				*/
 				if _, err = cw.Write([]byte("\n")); err != nil {
 					log.Fatal(err)
 				}
@@ -151,12 +152,12 @@ func main() {
 	var r rune
 	var name string
 	done := make(chan struct{})
-	defer close(done)
 	row := make([]byte, len(positions)+1)
 	var l int
 	for {
 		b, err = br.ReadByte()
 		if err == io.EOF {
+			close(done)
 			fmt.Println(" Length:", l)
 			return
 		}
