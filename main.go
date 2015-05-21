@@ -54,13 +54,10 @@ func main() {
 		log.Println("Warning: Expected the command to include a list or glob pattern of sample files.")
 	}
 
-	fmt.Println("Indexing all samples", time.Now().Sub(t0))
-
 	// TODO: Sort analyses by Identifier
 	analyses := NewSampleAnalyses(flag.Args()...)
-	fmt.Println(analyses)
 
-	fmt.Println("NewSampleAnalyses", time.Now().Sub(t0))
+	fmt.Println("Indexing all samples", time.Now().Sub(t0))
 
 	positions := make([]chan *Position, len(flag.Args()))
 
@@ -74,6 +71,7 @@ func main() {
 	var r rune
 	var name string
 	done := make(chan struct{})
+	row := make([]byte, len(positions)+1)
 	var l int
 	for {
 		b, err = br.ReadByte()
@@ -85,15 +83,22 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		r = unicode.ToUpper(rune(b))
+		r = rune(b)
 		switch {
 		default:
-			log.Fatalf("Unexpected character in reference fasta: %c\n", r)
+			log.Fatalf("Unexpected character in reference fasta: %c\n", b)
 		case unicode.IsLetter(r):
 			l++
-			for _, position := range positions {
-				<-position
+			r = unicode.ToUpper(r)
+			row[0] = byte(r)
+			for i, position := range positions {
+				if p, ok := <-position; ok {
+					row[i+1] = p.Call
+				} else {
+					row[i+1] = 'X'
+				}
 			}
+			//fmt.Printf("%s\n", row)
 		case unicode.IsSpace(r):
 			continue
 		case r == '>':
@@ -122,9 +127,7 @@ func main() {
 				positions[i] = analysis.Contig(done, name)
 			}
 		}
-
 	}
-	fmt.Println("Done")
 }
 
 // SampleAnalyses implements sort.Interface for []SampleAnalysis based on
@@ -178,7 +181,7 @@ type SampleAnalysis interface {
 }
 
 type Position struct {
-	Call       rune
+	Call       byte
 	Coverage   int
 	Proportion float64
 }
@@ -218,23 +221,13 @@ func (f Fasta) Contigs() []string {
 	return keys
 }
 
-func (f Fasta) emptyContig(done chan struct{}, ch chan *Position) {
-	for {
-		select {
-		case <-done:
-			return
-		default:
-			ch <- EMPTY_FASTA_POSITION
-		}
-	}
-}
-
 func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 	ch := make(chan *Position, 500)
 	go func(done chan struct{}, ch chan *Position) {
 		defer close(ch)
 		var err error
 		var b byte
+		var r rune
 		filePosition, ok := f.contigs[name]
 		if !ok {
 			//f.emptyContig(done, ch)
@@ -256,15 +249,16 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 				if err != nil {
 					log.Fatal(err)
 				}
-				if unicode.IsSpace(rune(b)) {
+				r = rune(b)
+				switch {
+				case unicode.IsSpace(r):
 					continue
-				}
-				if b == '>' {
-					//f.emptyContig(done, ch)
+				case r == '>':
 					return
 				}
+				r = unicode.ToUpper(r)
 				ch <- &Position{
-					Call:       unicode.ToUpper(rune(b)),
+					Call:       byte(r),
 					Coverage:   -1,
 					Proportion: -1.0,
 				}
