@@ -3,11 +3,13 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
 	"time"
@@ -20,12 +22,6 @@ import (
 var c_contig uint64
 var refPath = flag.String("reference", "", "Path to the reference fasta against which samples are compared")
 var dupPath = flag.String("duplicates", "", "Path to the duplicates file marking possible duplicated positions")
-
-var EMPTY_FASTA_POSITION = &Position{
-	Call:       'X',
-	Coverage:   -1,
-	Proportion: -1.0,
-}
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -59,7 +55,7 @@ func main() {
 
 	fmt.Println("Indexing all samples", time.Now().Sub(t0))
 
-	positions := make([]chan *Position, len(flag.Args()))
+	positions := make([]chan byte, len(flag.Args()))
 
 	file, err := os.Open(*refPath)
 	if err != nil {
@@ -67,16 +63,100 @@ func main() {
 	}
 	br := bufio.NewReader(file)
 
+	ch := make(chan []byte, 100)
+	d := make(chan struct{})
+	defer func() {
+		close(ch)
+		<-d
+	}()
+	go func(done chan struct{}, ch chan []byte, numSamples int) {
+		/*
+					'LocusID': "{0}::{1}".format(contig_name, position),
+			        #         'Reference': row.call_str[0],
+			        #         '#SNPcall': row.called_snp,
+			        #         # TODO: replace with n/a
+			        #         '#Indelcall': '0',
+			        #         '#Refcall': row.called_reference,
+			        #         '#CallWasMade': "{0:d}/{1:d}".format(num_samples - row.CallWasMade.count('N'), num_samples),
+			        #         '#PassedDepthFilter': "{0:d}/{1:d}".format(row.passed_coverage_filter, num_samples),
+			        #         '#PassedProportionFilter': "{0:d}/{1:d}".format(row.passed_proportion_filter, num_samples),
+			        #         '#A': row.num_A,
+			        #         '#C': row.num_C,
+			        #         '#G': row.num_G,
+			        #         '#T': row.num_T,
+			        #         # TODO: replace with n/a
+			        #         '#Indel': '0',
+			        #         '#NXdegen': row.num_N,
+			        #         'Contig': contig_name,
+			        #         'Position': position,
+			        #         'InDupRegion': row.is_reference_duplicated,
+			        #         'SampleConsensus': row.is_all_passed_consensus,
+			        #         'CallWasMade': row.CallWasMade,
+			        #         'PassedDepthFilter': row.PassedDepthFilter,
+			        #         'PassedProportionFilter': row.PassedProportionFilter,
+			        #         'Pattern': "".join(row.Pattern)
+		*/
+		/*
+			var g, a, t, c, n int
+			row := make([][]byte, numSamples+22)
+		*/
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+
+		//var buf bytes.Buffer
+		//callStr := make([]byte, numSamples)
+		//var ok bool
+		file, err := os.Create("master.tsv.gz")
+		if err != nil {
+			log.Fatal(err)
+		}
+		cw := gzip.NewWriter(file)
+		defer func() {
+			log.Println("Write goroutine shutting down")
+			if err := cw.Close(); err != nil {
+				log.Fatal(err)
+			}
+			if err = file.Close(); err != nil {
+				log.Fatal(err)
+			}
+			done <- struct{}{}
+		}()
+		if _, err := cw.Write([]byte("LocusID\tReference\t#SNPcall\t#Indelcall\t#Refcall\t#CallWasMade\t#PassedDepthFilter\t#PassedProportionFilter\t#A\t#C\t#G\t#T\t#Indel\t#NXdegen\tContig\tPosition\tInDupRegion\tSampleConsensus\tCallWasMade\tPassedDepthFilter\tPassedProportionFilter\tPattern\n")); err != nil {
+			log.Fatal(err)
+		}
+		for i := 1; ; i++ {
+			select {
+			case callStr, ok := <-ch:
+				if !ok {
+					return
+				}
+				if _, err = cw.Write([]byte(string(callStr))); err != nil {
+					log.Fatal(err)
+				}
+				/*
+					if _, err = cw.Write([]byte("LocusID\tReference\t#SNPcall\t#Indelcall\t#Refcall\t#CallWasMade\t#PassedDepthFilter\t#PassedProportionFilter\t#A\t#C\t#G\t#T\t#Indel\t#NXdegen\tContig\tPosition\tInDupRegion\tSampleConsensus\tCallWasMade\tPassedDepthFilter\tPassedProportionFilter\tPattern\n")); err != nil {
+						log.Fatal(err)
+					}
+				*/
+				if _, err = cw.Write([]byte("\n")); err != nil {
+					log.Fatal(err)
+				}
+			case <-c:
+				return
+			}
+		}
+	}(d, ch, len(positions))
+
 	var b byte
 	var r rune
 	var name string
 	done := make(chan struct{})
+	defer close(done)
 	row := make([]byte, len(positions)+1)
 	var l int
 	for {
 		b, err = br.ReadByte()
 		if err == io.EOF {
-			close(done)
 			fmt.Println(" Length:", l)
 			return
 		}
@@ -93,11 +173,12 @@ func main() {
 			row[0] = byte(r)
 			for i, position := range positions {
 				if p, ok := <-position; ok {
-					row[i+1] = p.Call
+					row[i+1] = p
 				} else {
 					row[i+1] = 'X'
 				}
 			}
+			ch <- row
 			//fmt.Printf("%s\n", row)
 		case unicode.IsSpace(r):
 			continue
@@ -177,14 +258,16 @@ func NewSampleAnalyses(filepaths ...string) SampleAnalyses {
 }
 
 type SampleAnalysis interface {
-	Contig(done chan struct{}, name string) chan *Position
+	Contig(done chan struct{}, name string) chan byte
 }
 
+/*
 type Position struct {
 	Call       byte
 	Coverage   int
 	Proportion float64
 }
+*/
 
 type Fasta struct {
 	path    string
@@ -210,6 +293,7 @@ func NewFasta(path string) *Fasta {
 	return fasta
 }
 
+/*
 func (f Fasta) Contigs() []string {
 	keys := make([]string, len(f.contigs))
 	i := 0
@@ -220,17 +304,17 @@ func (f Fasta) Contigs() []string {
 
 	return keys
 }
+*/
 
-func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
-	ch := make(chan *Position, 500)
-	go func(done chan struct{}, ch chan *Position) {
+func (f Fasta) Contig(done chan struct{}, name string) chan byte {
+	ch := make(chan byte, 500)
+	go func(done chan struct{}, ch chan byte) {
 		defer close(ch)
 		var err error
 		var b byte
 		var r rune
 		filePosition, ok := f.contigs[name]
 		if !ok {
-			//f.emptyContig(done, ch)
 			return
 		}
 
@@ -241,27 +325,22 @@ func (f Fasta) Contig(done chan struct{}, name string) chan *Position {
 
 		f.br.Reset(f.rd)
 		for err != io.EOF {
+			b, err = f.br.ReadByte()
+			if err != nil {
+				log.Fatal(err)
+			}
+			r = rune(b)
+			switch {
+			case unicode.IsSpace(r):
+				continue
+			case r == '>':
+				return
+			}
+
 			select {
 			case <-done:
 				return
-			default:
-				b, err = f.br.ReadByte()
-				if err != nil {
-					log.Fatal(err)
-				}
-				r = rune(b)
-				switch {
-				case unicode.IsSpace(r):
-					continue
-				case r == '>':
-					return
-				}
-				r = unicode.ToUpper(r)
-				ch <- &Position{
-					Call:       byte(r),
-					Coverage:   -1,
-					Proportion: -1.0,
-				}
+			case ch <- byte(unicode.ToUpper(r)):
 			}
 		}
 	}(done, ch)
