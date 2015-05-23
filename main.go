@@ -241,7 +241,11 @@ func NewSampleAnalyses(filepaths ...string) SampleAnalyses {
 			case strings.HasSuffix(path, "fasta"):
 				// NOTE: This will accept any path matching *fasta$
 				// ex: .fasta, .frankenfasta, notReallyAfasta
-				ch <- NewFasta(path, true)
+				fasta, err := NewFasta(path, true)
+				if err != nil {
+					log.Fatal(err)
+				}
+				ch <- fasta
 				//case strings.HasSuffix(path, "vcf"):
 				//	ch <- NewVcf(path)
 			}
