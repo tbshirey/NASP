@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -13,6 +14,30 @@ import (
 type Reference struct {
 	ref *Fasta
 	dup *Fasta
+}
+
+func NewReference(refPath, dupPath string) (*Reference, error) {
+	var ref, dup *Fasta
+	var err error
+
+	ref, err = NewFasta(refPath, false)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %s", err.Error(), dupPath)
+	}
+
+	if dupPath != "" {
+		// duplicates.txt is optional
+		dup, err = NewFasta(dupPath, false)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %s", err.Error(), dupPath)
+
+		}
+	}
+
+	return &Reference{
+		ref: ref,
+		dup: dup,
+	}, nil
 }
 
 // NextContig moves the Reader to the first position of the next contig and returns
@@ -66,6 +91,7 @@ func NewFasta(path string, indexContigs bool) (*Fasta, error) {
 	}
 
 	if indexContigs {
+		// TODO: measure memory/runtime of map vs sorted list.
 		fasta.index = make(map[string]int)
 		fasta.indexContigs()
 	}

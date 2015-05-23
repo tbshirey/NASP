@@ -9,19 +9,73 @@ import (
 	"time"
 )
 
-func TestNext(t *testing.T) {
+func tmpFasta(t *testing.T) *os.File {
 	file, err := ioutil.TempFile("", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		file.Close()
-		os.Remove(file.Name())
-	}()
-
 	if _, err := file.Write([]byte(">ContigA\nGATC\nABCD\n>ContigB\nCTAGDCBA")); err != nil {
 		t.Fatal(err)
 	}
+	return file
+}
+
+func closeFasta(file *os.File) {
+	file.Close()
+	os.Remove(file.Name())
+}
+
+func TestNewReferenceInvalidReference(t *testing.T) {
+	refFasta := tmpFasta(t)
+	defer closeFasta(refFasta)
+
+	_, err := NewReference("invalid", "")
+	if err == nil {
+		t.Fatal(err)
+	}
+
+	t.Log(err.Error())
+}
+
+func TestNewReferenceInvalidDuplicates(t *testing.T) {
+	refFasta := tmpFasta(t)
+	defer closeFasta(refFasta)
+
+	dupFasta := tmpFasta(t)
+	defer closeFasta(dupFasta)
+
+	_, err := NewReference(refFasta.Name(), "invalid")
+	if err == nil {
+		t.Fatal(err)
+	}
+
+	t.Log(err.Error())
+}
+
+func TestNewReferenceOnly(t *testing.T) {
+	refFasta := tmpFasta(t)
+	defer closeFasta(refFasta)
+
+	if ref, err := NewReference(refFasta.Name(), ""); ref == nil || err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewReferenceWithDuplicates(t *testing.T) {
+	refFasta := tmpFasta(t)
+	defer closeFasta(refFasta)
+
+	dupFasta := tmpFasta(t)
+	defer closeFasta(dupFasta)
+
+	if ref, err := NewReference(refFasta.Name(), dupFasta.Name()); ref == nil || err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNext(t *testing.T) {
+	file := tmpFasta(t)
+	defer closeFasta(file)
 
 	fasta, err := NewFasta(file.Name(), false)
 	if err != nil {
@@ -29,19 +83,19 @@ func TestNext(t *testing.T) {
 	}
 
 	expect := "ContigA"
-	name, err := fasta.Next()
+	name, err := fasta.NextContig()
 	if name != expect || err != nil {
 		t.Fatalf("Expected: %s, nil Observed: %s, %s", name, err)
 	}
 
 	expect = "ContigB"
-	name, err = fasta.Next()
+	name, err = fasta.NextContig()
 	if name != expect || err != nil {
 		t.Fatalf("Expected: %s, nil Observed: %s, %s", name, err)
 	}
 
 	expect = ""
-	name, err = fasta.Next()
+	name, err = fasta.NextContig()
 	if name != expect || err != io.EOF {
 		t.Fatalf("Expected: %s, io.EOF Observed: %s, %s", name, err)
 	}
