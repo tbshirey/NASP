@@ -3,13 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"os/signal"
 	"runtime"
 	"strings"
 	"time"
@@ -72,75 +70,7 @@ func main() {
 		<-d
 		log.Println("Write goroutines acknowledged shutdown")
 	}()
-	go func(done chan struct{}, ch chan []byte, numSamples int) {
-		/*
-					'LocusID': "{0}::{1}".format(contig_name, position),
-			        #         'Reference': row.call_str[0],
-			        #         '#SNPcall': row.called_snp,
-			        #         # TODO: replace with n/a
-			        #         '#Indelcall': '0',
-			        #         '#Refcall': row.called_reference,
-			        #         '#CallWasMade': "{0:d}/{1:d}".format(num_samples - row.CallWasMade.count('N'), num_samples),
-			        #         '#PassedDepthFilter': "{0:d}/{1:d}".format(row.passed_coverage_filter, num_samples),
-			        #         '#PassedProportionFilter': "{0:d}/{1:d}".format(row.passed_proportion_filter, num_samples),
-			        #         '#A': row.num_A,
-			        #         '#C': row.num_C,
-			        #         '#G': row.num_G,
-			        #         '#T': row.num_T,
-			        #         # TODO: replace with n/a
-			        #         '#Indel': '0',
-			        #         '#NXdegen': row.num_N,
-			        #         'Contig': contig_name,
-			        #         'Position': position,
-			        #         'InDupRegion': row.is_reference_duplicated,
-			        #         'SampleConsensus': row.is_all_passed_consensus,
-			        #         'CallWasMade': row.CallWasMade,
-			        #         'PassedDepthFilter': row.PassedDepthFilter,
-			        #         'PassedProportionFilter': row.PassedProportionFilter,
-			        #         'Pattern': "".join(row.Pattern)
-		*/
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-
-		var buf bytes.Buffer
-		file, err := os.Create("master.tsv.gz")
-		if err != nil {
-			log.Fatal(err)
-		}
-		// Compressed Writer
-		cw := gzip.NewWriter(file)
-		defer func() {
-			log.Println("master.tsv.gz goroutine shutting down")
-			if err := cw.Close(); err != nil {
-				log.Fatal(err)
-			}
-			if err = file.Close(); err != nil {
-				log.Fatal(err)
-			}
-			done <- struct{}{}
-		}()
-		if _, err := cw.Write([]byte("LocusID\tReference\t#SNPcall\t#Indelcall\t#Refcall\t#CallWasMade\t#PassedDepthFilter\t#PassedProportionFilter\t#A\t#C\t#G\t#T\t#Indel\t#NXdegen\tContig\tPosition\tInDupRegion\tSampleConsensus\tCallWasMade\tPassedDepthFilter\tPassedProportionFilter\tPattern\n")); err != nil {
-			log.Fatal(err)
-		}
-		for i := 1; ; i++ {
-			select {
-			case callStr, ok := <-ch:
-				if !ok {
-					return
-				}
-				buf.Reset()
-				buf.Write(callStr)
-				if _, err = buf.WriteTo(cw); err != nil {
-					log.Fatal(err)
-				}
-				if _, err = cw.Write([]byte("\n")); err != nil {
-					log.Fatal(err)
-				}
-			case <-c:
-				return
-			}
-		}
-	}(d, ch, len(positions))
+	go writeMaster(d, ch, len(positions))
 
 	var b byte
 	var r rune
