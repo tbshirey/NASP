@@ -8,9 +8,10 @@ fi
 ./nasp --reference ../nasp/benchmarks/Ecoli/reference.fasta ../nasp/benchmarks/Ecoli/external/*.frankenfasta
 
 #go tool pprof -svg nasp cpu.pprof > cpu.svg
-go tool pprof -svg nasp mem.pprof > mem.svg
+go tool pprof -svg nasp mem.pprof > inuse_mem.svg
+go tool pprof -alloc_space -svg nasp mem.pprof > alloc_mem.svg
 #go tool pprof -total_delay -contentions -mean_delay -lines -svg nasp block.pprof > block.svg
 go tool pprof -svg nasp block.pprof > block.svg
 
 #open cpu.svg mem.svg block.svg
-open mem.svg block.svg
+open inuse_mem.svg alloc_mem.svg block.svg

@@ -54,16 +54,18 @@ func main() {
 		log.Fatal(err)
 	}
 
+	row := make([][]byte, len(analyses))
+
 	for name, err := reference.NextContig(); err == nil; name, err = reference.NextContig() {
-		fmt.Println(name)
-		for _, analysis := range analyses {
+		for i, analysis := range analyses {
 			line, err := analysis.ScanPositions(name)
 			if err == io.EOF {
 				fmt.Println("EOF")
 			} else if err != nil {
 				log.Fatal(err)
 			}
-			fmt.Printf("%s: %s\n", analysis.Name(), line)
+			row[i] = line
+			fmt.Printf("%s\n%s\n", analysis.Name(), line)
 		}
 	}
 	/*
