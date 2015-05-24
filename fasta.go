@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"unicode"
 )
 
@@ -73,9 +74,11 @@ type Fasta struct {
 	//path string
 	// TODO: aligner string
 	// index maps contigName -> filePosition of the first position in each contig.
-	index map[string]int
+	name  string
+	index map[string]int64
 	rd    *os.File
 	br    *bufio.Reader
+	buf   *bytes.Buffer
 }
 
 func NewFasta(path string, indexContigs bool) (*Fasta, error) {
@@ -86,13 +89,15 @@ func NewFasta(path string, indexContigs bool) (*Fasta, error) {
 
 	fasta := &Fasta{
 		//path:    path,
-		rd: file,
-		br: bufio.NewReader(file),
+		name: filepath.Base(path),
+		rd:   file,
+		br:   bufio.NewReader(file),
+		buf:  &bytes.Buffer{},
 	}
 
 	if indexContigs {
 		// TODO: measure memory/runtime of map vs sorted list.
-		fasta.index = make(map[string]int)
+		fasta.index = make(map[string]int64)
 		fasta.indexContigs()
 	}
 	return fasta, nil
@@ -144,6 +149,10 @@ func (f Fasta) Contig(done chan struct{}, name string) chan byte {
 	return ch
 }
 
+func (f Fasta) Name() string {
+	return f.name
+}
+
 func (f Fasta) NextContig() (name string, err error) {
 	var line []byte
 	for {
@@ -169,6 +178,17 @@ func (f Fasta) NextContig() (name string, err error) {
 	}
 }
 
+func (f Fasta) ScanPositions(name string) ([]byte, error) {
+	filePosition, ok := f.index[name]
+	if !ok {
+		return nil, nil
+	}
+	fmt.Printf("Scanning %s at %d\n", name, filePosition)
+	f.rd.Seek(filePosition, os.SEEK_SET)
+	f.br.Reset(f.rd)
+	return f.br.ReadBytes('>')
+}
+
 /**
  * indexContigs maps the starting file position of each contig in the file.
  */
@@ -184,6 +204,7 @@ func (f Fasta) indexContigs() error {
 		default:
 			return err
 		case bufio.ErrBufferFull, io.EOF:
+			position += len(line)
 			break
 		case nil:
 			position += len(line)
@@ -201,7 +222,7 @@ func (f Fasta) indexContigs() error {
 			} else {
 				name = string(line[:idx])
 			}
-			f.index[name] = position
+			f.index[name] = int64(position)
 		}
 	}
 

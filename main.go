@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -11,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/davecheney/profile"
 )
@@ -48,96 +45,140 @@ func main() {
 		log.Println("Warning: Expected the command to include a list or glob pattern of sample files.")
 	}
 
-	// TODO: Sort analyses by Identifier
 	analyses := NewSampleAnalyses(flag.Args()...)
 
-	fmt.Println("Indexing all samples", time.Now().Sub(t0))
+	log.Println("Indexing all samples", time.Now().Sub(t0))
 
-	positions := make([]chan byte, len(flag.Args()))
-
-	file, err := os.Open(*refPath)
+	reference, err := NewReference(*refPath, *dupPath)
 	if err != nil {
 		log.Fatal(err)
 	}
-	br := bufio.NewReader(file)
 
-	ch := make(chan []byte, 100)
-	d := make(chan struct{})
-	defer func() {
-		log.Println("Close call string channel")
-		close(ch)
-		log.Println("Wait for all write goroutines to shutdown")
-		<-d
-		log.Println("Write goroutines acknowledged shutdown")
-	}()
-	go writeMaster(d, ch, len(positions))
-
-	var b byte
-	var r rune
-	var name string
-	done := make(chan struct{})
-	row := make([]byte, len(positions)+1)
-	var l int
-	for {
-		b, err = br.ReadByte()
-		if err == io.EOF {
-			close(done)
-			fmt.Println(" Length:", l)
-			return
+	for name, err := reference.NextContig(); err == nil; name, err = reference.NextContig() {
+		fmt.Println(name)
+		for _, analysis := range analyses {
+			line, err := analysis.ScanPositions(name)
+			if err == io.EOF {
+				fmt.Println("EOF")
+			} else if err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("%s: %s\n", analysis.Name(), line)
 		}
+	}
+	/*
+		name, err := reference.NextContig()
 		if err != nil {
 			log.Fatal(err)
 		}
-		r = rune(b)
-		switch {
-		default:
-			log.Fatalf("Unexpected character in reference fasta: %c\n", b)
-		case unicode.IsLetter(r):
-			l++
-			r = unicode.ToUpper(r)
-			row[0] = byte(r)
-			for i, position := range positions {
-				if p, ok := <-position; ok {
-					row[i+1] = p
-				} else {
-					row[i+1] = 'X'
-				}
-			}
-			ch <- row
-			//fmt.Printf("%s\n", row)
-		case unicode.IsSpace(r):
-			continue
-		case r == '>':
-			line, err := br.ReadSlice('\n')
+
+		for _, analysis := range analyses {
+			line, err := analysis.ScanPositions(name)
 			if err != nil {
 				log.Fatal(err)
 			}
+			fmt.Printf("%s: %s\n", analysis.Name(), line)
+		}
+	*/
 
-			//line = bytes.TrimPrefix(line, []byte("franken::"))
+	// TODO: Sort analyses by Identifier
+	/*
+		analyses := NewSampleAnalyses(flag.Args()...)
 
-			if idx := bytes.IndexAny(line, " \n"); idx < 0 {
-				name = string(line)
-			} else {
-				name = string(line[:idx])
+		fmt.Println("Indexing all samples", time.Now().Sub(t0))
+
+		positions := make([]chan byte, len(flag.Args()))
+
+		file, err := os.Open(*refPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		br := bufio.NewReader(file)
+	*/
+
+	/*
+		ch := make(chan []byte, 100)
+		d := make(chan struct{})
+		defer func() {
+			log.Println("Close call string channel")
+			close(ch)
+			log.Println("Wait for all write goroutines to shutdown")
+			<-d
+			log.Println("Write goroutines acknowledged shutdown")
+		}()
+		go writeMaster(d, ch, len(positions))
+	*/
+
+	/*
+		var b byte
+		var r rune
+		var name string
+		done := make(chan struct{})
+		row := make([]byte, len(positions)+1)
+		var l int
+		for {
+			b, err = br.ReadByte()
+			if err == io.EOF {
+				close(done)
+				fmt.Println(" Length:", l)
+				return
 			}
+			if err != nil {
+				log.Fatal(err)
+			}
+			r = rune(b)
+			switch {
+			default:
+				log.Fatalf("Unexpected character in reference fasta: %c\n", b)
+			case unicode.IsLetter(r):
+				l++
+				r = unicode.ToUpper(r)
+				row[0] = byte(r)
+				for i, position := range positions {
+					if p, ok := <-position; ok {
+						row[i+1] = p
+					} else {
+						row[i+1] = 'X'
+					}
+				}
+				ch <- row
+				//fmt.Printf("%s\n", row)
+			case unicode.IsSpace(r):
+				continue
+			case r == '>':
+				line, err := br.ReadSlice('\n')
+				if err != nil {
+					log.Fatal(err)
+				}
 
-			fmt.Println(" Length:", l)
-			l = 0
-			c_contig++
-			t := time.Now().Sub(t0)
-			fmt.Print(c_contig /*c_contig/(uint64(t/time.Second)),*/, " Scanning ", name, " ", t)
+				//line = bytes.TrimPrefix(line, []byte("franken::"))
 
-			close(done)
-			done = make(chan struct{})
-			for i, analysis := range analyses {
-				positions[i] = analysis.Contig(done, name)
+				if idx := bytes.IndexAny(line, " \n"); idx < 0 {
+					name = string(line)
+				} else {
+					name = string(line[:idx])
+				}
+
+				fmt.Println(" Length:", l)
+				l = 0
+				c_contig++
+				t := time.Now().Sub(t0)
+				fmt.Print(c_contig, " Scanning ", name, " ", t)
+
+				close(done)
+				done = make(chan struct{})
+				for i, analysis := range analyses {
+					positions[i] = analysis.Contig(done, name)
+				}
 			}
 		}
-	}
+	*/
 }
 
 type SampleAnalysis interface {
 	Contig(done chan struct{}, name string) chan byte
+	Name() string
+	ScanPositions(name string) ([]byte, error)
 }
 
 // SampleAnalyses implements sort.Interface for []SampleAnalysis based on
