@@ -30,19 +30,65 @@ func NewContigStat(name string, minCoverage int, minProportion float64) *ContigS
 	}
 }
 
-func (c ContigStat) Compare(contigs chan Contigs, sampleStats chan SampleStats) {
-	//for ch := range contigs {
+func (c ContigStat) Compare(contigs chan Contigs, sampleStats chan SampleStats, numSamples int) {
+	var isDup bool
+	stats := make(SampleStats, numSamples)
+	for contig := range contigs {
+		//fmt.Println(contig.Analyses)
+		c.referenceLength += len(contig.Reference)
+		for i, refCall := range contig.Reference {
+			isDup = contig.Duplicates != nil && contig.Duplicates[i] == '1'
+			if isDup {
+				c.referenceDuplicated++
+			}
+			for j, analysis := range contig.Analyses {
+				if len(analysis) < i+1 {
+					continue
+				}
+				switch analysis[i] {
+				case 'G', 'A', 'T', 'C':
+					// TODO: check pass cov/prop
+					if analysis[i] == refCall {
+						stats[j].calledReference++
+					}
+
+				}
+			}
+		}
+	}
 	/*
-		c.referenceLength += len(ch.Reference)
-		for i, refCall := range ch.Reference {
+		var isDup bool
+		//stats := make(SampleStats, numSamples)
+		statsCh := make(chan SampleStats, 4096)
+		for contig := range contigs {
+			c.referenceLength += len(contig.Reference)
+
+			for i, refCall := range contig.Reference {
+				isDup = contig.Duplicates != nil && contig.Duplicates[i] == '1'
+				go c.compare(statsCh, i, refCall, isDup, contig.Analyses)
+			}
+			//fmt.Printf("%s", ch)
 		}
 	*/
-	//fmt.Printf("%s", ch)
-	//}
-	ok := true
-	for ok {
-		_, ok = <-contigs
+	/*
+		ok := true
+		for ok {
+			_, ok = <-contigs
+		}
+	*/
+}
+
+func (c ContigStat) compare(statsCh chan SampleStats, i int, refCall byte, isDup bool, analyses [][]byte) {
+	stats := make(SampleStats, len(analyses))
+	for j, analysis := range analyses {
+		if len(analysis) < i+1 {
+			continue
+		}
+		if analysis[i] == refCall {
+			stats[j].calledReference++
+		}
 	}
+	statsCh <- stats
 }
 
 type SampleStat struct {

@@ -72,8 +72,9 @@ func main() {
 	//	var err error
 	var name string
 	var ref, dup []byte
-	var pos [][]byte
+	//var pos [][]byte
 	var isPrefix bool
+	pos := make([][]byte, len(analyses))
 	for {
 		name, err = reference.NextContig()
 		if err == io.EOF {
@@ -85,7 +86,13 @@ func main() {
 
 		contigsCh := make(chan Contigs, 1)
 		contigStat := NewContigStat(name, *minCoverage, *minProportion)
-		go contigStat.Compare(contigsCh, sampleStatsCh)
+		go contigStat.Compare(contigsCh, sampleStatsCh, len(analyses))
+
+		matrixCh := make(chan Contigs, 1)
+		go func(ch chan Contigs) {
+			for range ch {
+			}
+		}(matrixCh)
 
 		if err = analyses.SeekContig(name); err != nil {
 			log.Fatal(err)
@@ -96,7 +103,7 @@ func main() {
 		isPrefix = true
 		for err == nil || isPrefix {
 			ref, dup, isPrefix, err = reference.ReadPositions()
-			pos, err = analyses.ReadPositions()
+			err = analyses.ReadPositions(pos)
 			// FIXME: Check errors
 			/*
 				if err != nil {
@@ -109,8 +116,15 @@ func main() {
 				Duplicates: dup,
 				Analyses:   pos,
 			}
+
+			matrixCh <- Contigs{
+				Reference:  ref,
+				Duplicates: dup,
+				Analyses:   pos,
+			}
 		}
 		close(contigsCh)
+		close(matrixCh)
 		//fmt.Println("NumGoroutine", runtime.NumGoroutine())
 
 	}
@@ -237,16 +251,15 @@ type SampleAnalysis interface {
 // the identifier field.
 type SampleAnalyses []SampleAnalysis
 
-func (s SampleAnalyses) ReadPositions() ([][]byte, error) {
-	positions := make([][]byte, len(s))
+func (s SampleAnalyses) ReadPositions(positions [][]byte) error {
 	for i, analysis := range s {
 		pos, err := analysis.ReadPositions()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		positions[i] = pos
 	}
-	return positions, nil
+	return nil
 }
 
 /**
