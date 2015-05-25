@@ -31,21 +31,31 @@ func NewContigStat(name string, minCoverage int, minProportion float64) *ContigS
 }
 
 func (c ContigStat) Compare(contigs chan Contigs, sampleStats chan SampleStats, numSamples int) {
-	var isDup bool
+	var isDup, refCalled bool
 	stats := make(SampleStats, numSamples)
 	for contig := range contigs {
 		//fmt.Println(contig.Analyses)
 		c.referenceLength += len(contig.Reference)
 		for i, refCall := range contig.Reference {
+			switch refCall {
+			case 'G', 'A', 'T', 'C':
+				refCalled = true
+			}
 			isDup = contig.Duplicates != nil && contig.Duplicates[i] == '1'
 			if isDup {
 				c.referenceDuplicated++
 			}
 			for j, analysis := range contig.Analyses {
-				if len(analysis) < i+1 {
+				if analysis == nil || len(analysis) < i+1 || !refCalled {
 					continue
 				}
 				switch analysis[i] {
+				default:
+					stats[j].calledDegen++
+				case 'X', 'N':
+					break
+				case refCall:
+					stats[j].calledSnp++
 				case 'G', 'A', 'T', 'C':
 					// TODO: check pass cov/prop
 					if analysis[i] == refCall {
