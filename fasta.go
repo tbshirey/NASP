@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +10,29 @@ import (
 	"path/filepath"
 	"unicode"
 )
+
+type ReferenceContig struct {
+	RefChannel        chan []byte
+	DupChannel        chan []byte
+	name              string
+	length            int
+	clean             int
+	duplicated        int
+	allCalled         int
+	allPassCoverage   int
+	allPassProportion int
+	allPassConsensus  int
+	qualityBreadth    int
+	anySnp            int
+	bestSnp           int
+}
+
+func (r ReferenceContig) Compare(analyses SampleAnalyses, sampleStatsCh chan SampleStats) {
+	for {
+		fmt.Printf("%s\n", <-r.RefChannel)
+		<-r.DupChannel
+	}
+}
 
 type Reference struct {
 	ref *Fasta
@@ -43,31 +65,56 @@ func NewReference(refPath, dupPath string) (*Reference, error) {
 
 // NextContig moves the Reader to the first position of the next contig and returns
 // its name.
-func (r Reference) NextContig() (name string, err error) {
-	if r.dup == nil {
-		return r.ref.NextContig()
+func (r Reference) NextContig() (*ReferenceContig, error) {
+	var rname, dname string
+	var rerr, derr error
+
+	if r.dup != nil {
+
+		// The duplicates file is optional. If present, it must be read in lockstep
+		// with the reference.
+		dname, derr = r.dup.NextContig()
+		rname, rerr = r.ref.NextContig()
+
+		if derr != nil || derr != rerr {
+			return nil, fmt.Errorf("duplicates file: %s reference file: %s\n", derr.Error(), rerr.Error())
+		}
+
+		if rname != dname {
+			return nil, fmt.Errorf("The duplicates file should have a corresponding contig for every contig in the reference.\nThe following contigs were found in corresponding positions of the reference and duplicates files: `%s` and `%s`\n", rname, dname)
+		}
+
+	} else {
+		rname, rerr = r.ref.NextContig()
+		if rerr != nil {
+			return nil, rerr
+		}
 	}
 
-	// The duplicates file is optional. If present, it must be read in lockstep
-	// with the reference.
-	dname, derr := r.dup.NextContig()
-	rname, rerr := r.ref.NextContig()
+	return &ReferenceContig{
+		RefChannel: make(chan []byte, 10),
+		DupChannel: make(chan []byte, 10),
+		name:       rname,
+	}, nil
+}
 
-	if derr != nil || derr != rerr {
-		// FIXME: Return an error warning the user the errors don't match
-		// It's fine if they both return the same error such as io.EOF, but a
-		// mismatch could indicate a serious error that might otherwise not be
-		// reported.
-		return "", err
+func (r Reference) PositionSlice() (ref, dup []byte, isPrefix bool, err error) {
+	var rerr, derr error
+
+	ref, rerr = r.ref.PositionSlice()
+
+	if r.dup != nil {
+		dup, derr = r.dup.PositionSlice()
+
+		if derr != nil || derr != rerr {
+			return nil, nil, false, fmt.Errorf("duplicates file: %s reference file: %s\n", derr.Error(), rerr.Error())
+		}
 	}
 
-	if rname != dname {
-		return "", errors.New("The duplicates file should have a corresponding contig for every contig in the reference.\n" +
-			"Reference: " + rname + "\n" +
-			"Duplicates: " + dname + "\n")
+	if rerr == bufio.ErrBufferFull {
+		return ref, dup, true, rerr
 	}
-
-	return rname, err
+	return ref, dup, false, rerr
 }
 
 type Fasta struct {
@@ -176,6 +223,10 @@ func (f Fasta) NextContig() (name string, err error) {
 			}
 		}
 	}
+}
+
+func (f Fasta) PositionSlice() ([]byte, error) {
+	return f.br.ReadSlice('>')
 }
 
 func (f Fasta) ScanPositions(name string) ([]byte, error) {

@@ -34,7 +34,7 @@ func (c ContigStats) Aggregate(ch chan []ContigStats) {
 
 type SampleStats []SampleStat
 
-func (s SampleStats) Aggregate(ch chan []SampleStat /*, filepath string*/) {
+func (s SampleStats) Aggregate(ch chan SampleStats /*, filepath string*/) {
 	for stats := range ch {
 		for i := range s {
 			s[i].wasCalled += stats[i].wasCalled

@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/davecheney/profile"
@@ -54,20 +55,43 @@ func main() {
 		log.Fatal(err)
 	}
 
-	row := make([][]byte, len(analyses))
+	var wg sync.WaitGroup
 
-	for name, err := reference.NextContig(); err == nil; name, err = reference.NextContig() {
-		for i, analysis := range analyses {
-			line, err := analysis.ScanPositions(name)
-			if err == io.EOF {
-				fmt.Println("EOF")
-			} else if err != nil {
-				log.Fatal(err)
-			}
-			row[i] = line
-			fmt.Printf("%s\n%s\n", analysis.Name(), line)
+	wg.Add(1)
+	sampleStatsCh := make(chan SampleStats)
+	sampleStats := make(SampleStats, len(analyses))
+	go func(ch chan SampleStats) {
+		defer wg.Done()
+		// Will write stats to disk and shutdown when the channel is closed.
+		sampleStats.Aggregate(ch)
+	}(sampleStatsCh)
+
+	var contig *ReferenceContig
+	var ref, dup []byte
+	var isPrefix bool
+
+	for {
+		contig, err = reference.NextContig()
+		if err == io.EOF {
+			break
 		}
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		go contig.Compare(analyses, sampleStatsCh)
+
+		isPrefix = true
+		for err == nil || isPrefix {
+			ref, dup, isPrefix, err = reference.PositionSlice()
+			contig.RefChannel <- ref
+			contig.DupChannel <- dup
+		}
+		//contigStatsCh <- contig
+		fmt.Println(contig)
 	}
+	close(sampleStatsCh)
+
 	/*
 		name, err := reference.NextContig()
 		if err != nil {
