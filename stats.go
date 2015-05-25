@@ -1,9 +1,17 @@
 package main
 
+type Contigs struct {
+	Reference  []byte
+	Duplicates []byte
+	Analyses   [][]byte
+}
+
 type ContigStat struct {
-	//name                string
+	name                string
+	minCoverage         int
+	minProportion       float64
 	referenceLength     int
-	referenecClean      int
+	referenceClean      int
 	referenceDuplicated int
 	allCalled           int
 	allPassedCoverage   int
@@ -12,6 +20,29 @@ type ContigStat struct {
 	qualityBreadth      int
 	anySnps             int
 	bestSnps            int
+}
+
+func NewContigStat(name string, minCoverage int, minProportion float64) *ContigStat {
+	return &ContigStat{
+		name:          name,
+		minCoverage:   minCoverage,
+		minProportion: minProportion,
+	}
+}
+
+func (c ContigStat) Compare(contigs chan Contigs, sampleStats chan SampleStats) {
+	//for ch := range contigs {
+	/*
+		c.referenceLength += len(ch.Reference)
+		for i, refCall := range ch.Reference {
+		}
+	*/
+	//fmt.Printf("%s", ch)
+	//}
+	ok := true
+	for ok {
+		_, ok = <-contigs
+	}
 }
 
 type SampleStat struct {

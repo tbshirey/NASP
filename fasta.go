@@ -8,31 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"unicode"
 )
-
-type ReferenceContig struct {
-	RefChannel        chan []byte
-	DupChannel        chan []byte
-	name              string
-	length            int
-	clean             int
-	duplicated        int
-	allCalled         int
-	allPassCoverage   int
-	allPassProportion int
-	allPassConsensus  int
-	qualityBreadth    int
-	anySnp            int
-	bestSnp           int
-}
-
-func (r ReferenceContig) Compare(analyses SampleAnalyses, sampleStatsCh chan SampleStats) {
-	for {
-		fmt.Printf("%s\n", <-r.RefChannel)
-		<-r.DupChannel
-	}
-}
 
 type Reference struct {
 	ref *Fasta
@@ -63,48 +39,38 @@ func NewReference(refPath, dupPath string) (*Reference, error) {
 	}, nil
 }
 
-// NextContig moves the Reader to the first position of the next contig and returns
-// its name.
-func (r Reference) NextContig() (*ReferenceContig, error) {
+// NextContig moves the Reader to the first position of the next contig and
+// returns its name.
+func (r Reference) NextContig() (string, error) {
 	var rname, dname string
 	var rerr, derr error
 
-	if r.dup != nil {
+	rname, rerr = r.ref.NextContig()
 
+	if r.dup != nil {
 		// The duplicates file is optional. If present, it must be read in lockstep
 		// with the reference.
 		dname, derr = r.dup.NextContig()
-		rname, rerr = r.ref.NextContig()
 
 		if derr != nil || derr != rerr {
-			return nil, fmt.Errorf("duplicates file: %s reference file: %s\n", derr.Error(), rerr.Error())
+			return "", fmt.Errorf("duplicates file: %s reference file: %s\n", derr.Error(), rerr.Error())
 		}
 
 		if rname != dname {
-			return nil, fmt.Errorf("The duplicates file should have a corresponding contig for every contig in the reference.\nThe following contigs were found in corresponding positions of the reference and duplicates files: `%s` and `%s`\n", rname, dname)
-		}
-
-	} else {
-		rname, rerr = r.ref.NextContig()
-		if rerr != nil {
-			return nil, rerr
+			return "", fmt.Errorf("The duplicates file should have a corresponding contig for every contig in the reference.\nThe following contigs were found in corresponding positions of the reference and duplicates files: `%s` and `%s`\n", rname, dname)
 		}
 	}
 
-	return &ReferenceContig{
-		RefChannel: make(chan []byte, 10),
-		DupChannel: make(chan []byte, 10),
-		name:       rname,
-	}, nil
+	return rname, rerr
 }
 
-func (r Reference) PositionSlice() (ref, dup []byte, isPrefix bool, err error) {
-	var rerr, derr error
+func (r Reference) ReadPositions() (ref, dup []byte, isPrefix bool, rerr error) {
+	var derr error
 
-	ref, rerr = r.ref.PositionSlice()
+	ref, rerr = r.ref.ReadPositions()
 
 	if r.dup != nil {
-		dup, derr = r.dup.PositionSlice()
+		dup, derr = r.dup.ReadPositions()
 
 		if derr != nil || derr != rerr {
 			return nil, nil, false, fmt.Errorf("duplicates file: %s reference file: %s\n", derr.Error(), rerr.Error())
@@ -112,7 +78,7 @@ func (r Reference) PositionSlice() (ref, dup []byte, isPrefix bool, err error) {
 	}
 
 	if rerr == bufio.ErrBufferFull {
-		return ref, dup, true, rerr
+		return ref, dup, true, nil
 	}
 	return ref, dup, false, rerr
 }
@@ -150,6 +116,7 @@ func NewFasta(path string, indexContigs bool) (*Fasta, error) {
 	return fasta, nil
 }
 
+/*
 func (f Fasta) Contig(done chan struct{}, name string) chan byte {
 	ch := make(chan byte, 100)
 	go func(done chan struct{}, ch chan byte) {
@@ -195,11 +162,20 @@ func (f Fasta) Contig(done chan struct{}, name string) chan byte {
 
 	return ch
 }
+*/
 
 func (f Fasta) Name() string {
 	return f.name
 }
 
+/**
+ * NextContig advances the io.Reader to the first position of the next contig
+ * and returns its name.
+ *
+ * TODO: document name excludes description and prefix
+ * >frankenfasta::name description
+ * gatc...
+ */
 func (f Fasta) NextContig() (name string, err error) {
 	var line []byte
 	for {
@@ -225,10 +201,21 @@ func (f Fasta) NextContig() (name string, err error) {
 	}
 }
 
-func (f Fasta) PositionSlice() ([]byte, error) {
+func (f Fasta) ReadPositions() ([]byte, error) {
 	return f.br.ReadSlice('>')
 }
 
+func (f Fasta) SeekContig(name string) error {
+	if filePosition, ok := f.index[name]; ok {
+		_, err := f.rd.Seek(filePosition, os.SEEK_SET)
+		return err
+	}
+
+	_, err := f.rd.Seek(0, os.SEEK_END)
+	return err
+}
+
+/*
 func (f Fasta) ScanPositions(name string) ([]byte, error) {
 	filePosition, ok := f.index[name]
 	if !ok {
@@ -239,6 +226,7 @@ func (f Fasta) ScanPositions(name string) ([]byte, error) {
 	f.br.Reset(f.rd)
 	return f.br.ReadBytes('>')
 }
+*/
 
 /**
  * indexContigs maps the starting file position of each contig in the file.
@@ -259,7 +247,9 @@ func (f Fasta) indexContigs() error {
 			break
 		case nil:
 			position += len(line)
-			line, err = f.br.ReadBytes('\n')
+			// NOTE: This saves a few megabytes of RAM over ReadBytes,
+			// but could fail with a ErrBufferFull
+			line, err = f.br.ReadSlice('\n')
 			if err != nil {
 				log.Fatal(err)
 			}

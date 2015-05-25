@@ -8,7 +8,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/davecheney/profile"
@@ -18,6 +17,8 @@ import (
 var c_contig uint64
 var refPath = flag.String("reference", "", "Path to the reference fasta against which samples are compared")
 var dupPath = flag.String("duplicates", "", "Path to the duplicates file marking possible duplicated positions")
+var minCoverage = flag.Int("coverage", 0, "Filter positions below this coverage/depth threshold")
+var minProportion = flag.Float64("proportion", 0.0, "Filter positions below this proportion threshold")
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -55,23 +56,26 @@ func main() {
 		log.Fatal(err)
 	}
 
-	var wg sync.WaitGroup
+	//var wg sync.WaitGroup
 
-	wg.Add(1)
+	//wg.Add(1)
 	sampleStatsCh := make(chan SampleStats)
-	sampleStats := make(SampleStats, len(analyses))
-	go func(ch chan SampleStats) {
-		defer wg.Done()
-		// Will write stats to disk and shutdown when the channel is closed.
-		sampleStats.Aggregate(ch)
-	}(sampleStatsCh)
+	/*
+		sampleStats := make(SampleStats, len(analyses))
+		go func(ch chan SampleStats) {
+			defer wg.Done()
+			// Will write stats to disk and shutdown when the channel is closed.
+			sampleStats.Aggregate(ch)
+		}(sampleStatsCh)
+	*/
 
-	var contig *ReferenceContig
+	//	var err error
+	var name string
 	var ref, dup []byte
+	var pos [][]byte
 	var isPrefix bool
-
 	for {
-		contig, err = reference.NextContig()
+		name, err = reference.NextContig()
 		if err == io.EOF {
 			break
 		}
@@ -79,16 +83,36 @@ func main() {
 			log.Fatal(err)
 		}
 
-		go contig.Compare(analyses, sampleStatsCh)
+		contigsCh := make(chan Contigs, 1)
+		contigStat := NewContigStat(name, *minCoverage, *minProportion)
+		go contigStat.Compare(contigsCh, sampleStatsCh)
+
+		if err = analyses.SeekContig(name); err != nil {
+			log.Fatal(err)
+		}
+
+		log.Println("Scanning", name, time.Now().Sub(t0))
 
 		isPrefix = true
 		for err == nil || isPrefix {
-			ref, dup, isPrefix, err = reference.PositionSlice()
-			contig.RefChannel <- ref
-			contig.DupChannel <- dup
+			ref, dup, isPrefix, err = reference.ReadPositions()
+			pos, err = analyses.ReadPositions()
+			// FIXME: Check errors
+			/*
+				if err != nil {
+					log.Fatal(err)
+				}
+			*/
+
+			contigsCh <- Contigs{
+				Reference:  ref,
+				Duplicates: dup,
+				Analyses:   pos,
+			}
 		}
-		//contigStatsCh <- contig
-		fmt.Println(contig)
+		close(contigsCh)
+		//fmt.Println("NumGoroutine", runtime.NumGoroutine())
+
 	}
 	close(sampleStatsCh)
 
@@ -202,14 +226,41 @@ func main() {
 }
 
 type SampleAnalysis interface {
-	Contig(done chan struct{}, name string) chan byte
-	Name() string
-	ScanPositions(name string) ([]byte, error)
+	//Contig(done chan struct{}, name string) chan byte
+	//Name() string
+	//ScanPositions(name string) ([]byte, error)
+	SeekContig(name string) error
+	ReadPositions() ([]byte, error)
 }
 
 // SampleAnalyses implements sort.Interface for []SampleAnalysis based on
 // the identifier field.
 type SampleAnalyses []SampleAnalysis
+
+func (s SampleAnalyses) ReadPositions() ([][]byte, error) {
+	positions := make([][]byte, len(s))
+	for i, analysis := range s {
+		pos, err := analysis.ReadPositions()
+		if err != nil {
+			return nil, err
+		}
+		positions[i] = pos
+	}
+	return positions, nil
+}
+
+/**
+ * SeekContig moves the io.Reader for each analysis onto the first position
+ * of the contig with the given name, or to io.EOF if it does not exist.
+ */
+func (s SampleAnalyses) SeekContig(name string) (err error) {
+	for _, analysis := range s {
+		if err = analysis.SeekContig(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (s SampleAnalyses) Len() int {
 	return len(s)
