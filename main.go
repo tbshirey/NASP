@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/davecheney/profile"
@@ -19,6 +21,8 @@ var refPath = flag.String("reference", "", "Path to the reference fasta against 
 var dupPath = flag.String("duplicates", "", "Path to the duplicates file marking possible duplicated positions")
 var minCoverage = flag.Int("coverage", 0, "Filter positions below this coverage/depth threshold")
 var minProportion = flag.Float64("proportion", 0.0, "Filter positions below this proportion threshold")
+
+var NUM_SAMPLES int
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -49,6 +53,8 @@ func main() {
 
 	analyses := NewSampleAnalyses(flag.Args()...)
 
+	NUM_SAMPLES = len(analyses)
+
 	log.Println("Indexing all samples", time.Now().Sub(t0))
 
 	reference, err := NewReference(*refPath, *dupPath)
@@ -56,25 +62,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//var wg sync.WaitGroup
-
-	//wg.Add(1)
-	sampleStatsCh := make(chan SampleStats)
-	/*
-		sampleStats := make(SampleStats, len(analyses))
-		go func(ch chan SampleStats) {
-			defer wg.Done()
-			// Will write stats to disk and shutdown when the channel is closed.
-			sampleStats.Aggregate(ch)
-		}(sampleStatsCh)
-	*/
+	ch := make(chan *Position, 500)
+	go func(c chan *Position) {
+		for position := range c {
+			positionPool.Put(position)
+		}
+	}(ch)
 
 	//	var err error
 	var name string
 	var ref, dup []byte
-	//var pos [][]byte
 	var isPrefix bool
-	pos := make([][]byte, len(analyses))
+	pos := make([][]byte, NUM_SAMPLES)
 	for {
 		name, err = reference.NextContig()
 		if err == io.EOF {
@@ -84,16 +83,6 @@ func main() {
 			log.Fatal(err)
 		}
 
-		contigsCh := make(chan Contigs, 1)
-		contigStat := NewContigStat(name, *minCoverage, *minProportion)
-		go contigStat.Compare(contigsCh, sampleStatsCh, len(analyses))
-
-		matrixCh := make(chan Contigs, 1)
-		go func(ch chan Contigs) {
-			for range ch {
-			}
-		}(matrixCh)
-
 		if err = analyses.SeekContig(name); err != nil {
 			log.Fatal(err)
 		}
@@ -101,142 +90,201 @@ func main() {
 		log.Println("Scanning", name, time.Now().Sub(t0))
 
 		isPrefix = true
-		for err == nil || isPrefix {
+		for isPrefix {
 			ref, dup, isPrefix, err = reference.ReadPositions()
-			err = analyses.ReadPositions(pos)
-			// FIXME: Check errors
-			/*
-				if err != nil {
-					log.Fatal(err)
-				}
-			*/
-
-			contigsCh <- Contigs{
-				Reference:  ref,
-				Duplicates: dup,
-				Analyses:   pos,
-			}
-
-			matrixCh <- Contigs{
-				Reference:  ref,
-				Duplicates: dup,
-				Analyses:   pos,
-			}
-		}
-		close(contigsCh)
-		close(matrixCh)
-		//fmt.Println("NumGoroutine", runtime.NumGoroutine())
-
-	}
-	close(sampleStatsCh)
-
-	/*
-		name, err := reference.NextContig()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		for _, analysis := range analyses {
-			line, err := analysis.ScanPositions(name)
-			if err != nil {
-				log.Fatal(err)
-			}
-			fmt.Printf("%s: %s\n", analysis.Name(), line)
-		}
-	*/
-
-	// TODO: Sort analyses by Identifier
-	/*
-		analyses := NewSampleAnalyses(flag.Args()...)
-
-		fmt.Println("Indexing all samples", time.Now().Sub(t0))
-
-		positions := make([]chan byte, len(flag.Args()))
-
-		file, err := os.Open(*refPath)
-		if err != nil {
-			log.Fatal(err)
-		}
-		br := bufio.NewReader(file)
-	*/
-
-	/*
-		ch := make(chan []byte, 100)
-		d := make(chan struct{})
-		defer func() {
-			log.Println("Close call string channel")
-			close(ch)
-			log.Println("Wait for all write goroutines to shutdown")
-			<-d
-			log.Println("Write goroutines acknowledged shutdown")
-		}()
-		go writeMaster(d, ch, len(positions))
-	*/
-
-	/*
-		var b byte
-		var r rune
-		var name string
-		done := make(chan struct{})
-		row := make([]byte, len(positions)+1)
-		var l int
-		for {
-			b, err = br.ReadByte()
 			if err == io.EOF {
-				close(done)
-				fmt.Println(" Length:", l)
-				return
+				break
+			} else if err != nil {
+				log.Fatalf("Error scanning reference contig %s: %s", name, err.Error())
 			}
-			if err != nil {
-				log.Fatal(err)
+			if err = analyses.ReadPositions(pos); err != nil {
+				log.Fatalf("Error reading contig %s: %s", name, err.Error())
 			}
-			r = rune(b)
-			switch {
-			default:
-				log.Fatalf("Unexpected character in reference fasta: %c\n", b)
-			case unicode.IsLetter(r):
-				l++
-				r = unicode.ToUpper(r)
-				row[0] = byte(r)
-				for i, position := range positions {
-					if p, ok := <-position; ok {
-						row[i+1] = p
-					} else {
-						row[i+1] = 'X'
-					}
-				}
-				ch <- row
-				//fmt.Printf("%s\n", row)
-			case unicode.IsSpace(r):
+			if isPrefix {
+				log.Println("Scanning...", name, time.Now().Sub(t0))
+			}
+			fmt.Printf("len(ref) = %d\n", len(ref))
+			wg.Add(1)
+			go analyzePositions(ch, ref, dup, pos)
+			//fmt.Printf("%s %s", ref, dup)
+		}
+		//close(contigsCh)
+		fmt.Println("NumGoroutine", runtime.NumGoroutine())
+	}
+	wg.Wait()
+}
+
+var wg sync.WaitGroup
+
+// Assumes all positions are uppercase
+func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
+	defer func() {
+		fmt.Println("Shutdown NumGoroutine", runtime.NumGoroutine())
+		wg.Done()
+	}()
+	stats := statsPool.Get().(SampleStats)
+	for i, refCall := range ref {
+		position := positionPool.Get().(*Position)
+
+		switch refCall {
+		default:
+			position.pattern[0] = 'N'
+		case 'G', 'A', 'T', 'C':
+			position.isReferenceClean = true
+			position.pattern[0] = '1'
+		}
+		position.callStr[0] = refCall
+
+		position.isReferenceDuplicated = dup != nil && dup[i] == '1'
+
+		for j, analysis := range analyses {
+			if analysis == nil || len(analysis) < i+1 {
+				position.isAllCalled = false
+				position.callStr[j+1] = 'X'
 				continue
-			case r == '>':
-				line, err := br.ReadSlice('\n')
-				if err != nil {
-					log.Fatal(err)
+			}
+			position.callStr[j+1] = analysis[i]
+
+			// TODO _is_pass_filter
+			stats[j].passedCoverageFilter++
+			stats[j].passedProportionFilter++
+			position.passedCoverage++
+			position.passedProportion++
+			position.passedDepthFilter[j+1] = '-'
+			position.passedProportionFilter[j+1] = '-'
+
+			// TODO: Sample consensus
+
+			// It can be called anything so long as it was called something
+			// X and N
+			wasCalled := true
+
+			switch analysis[i] {
+			case 'G':
+				position.g++
+			case 'A':
+				position.a++
+			case 'T':
+				position.t++
+			case 'C':
+				position.c++
+			case 'X', 'N':
+				wasCalled = false
+				fallthrough
+			default:
+				position.isAllPassConsensus = false
+				position.isAllQualityBreadth = false
+				position.n++
+			}
+
+			if wasCalled {
+				stats[j].wasCalled++
+				position.wasCalled++
+				position.callWasMade[j] = 'Y'
+			} else {
+				position.callWasMade[j] = 'N'
+				position.isAllCalled = false
+				position.isAllQualityBreadth = false
+			}
+
+			// TODO: is pass cov/prop
+			if wasCalled && position.isReferenceClean {
+				if !wasCalled {
+					position.calledDegen++
+					if !position.isReferenceDuplicated {
+						stats[j].calledDegen++
+					}
+				} else if refCall == analysis[i] {
+					position.calledReference++
+					if !position.isReferenceDuplicated {
+						stats[j].calledReference++
+					}
+				} else if !position.isReferenceDuplicated {
+					// Called A/C/G/T and doesn't match the reference
+					position.calledSnp++
+					position.isMissingMatrix = true
 				}
 
-				//line = bytes.TrimPrefix(line, []byte("franken::"))
-
-				if idx := bytes.IndexAny(line, " \n"); idx < 0 {
-					name = string(line)
-				} else {
-					name = string(line[:idx])
-				}
-
-				fmt.Println(" Length:", l)
-				l = 0
-				c_contig++
-				t := time.Now().Sub(t0)
-				fmt.Print(c_contig, " Scanning ", name, " ", t)
-
-				close(done)
-				done = make(chan struct{})
-				for i, analysis := range analyses {
-					positions[i] = analysis.Contig(done, name)
-				}
+			} else {
+				position.isAllQualityBreadth = false
 			}
 		}
-	*/
+		ch <- position
+	}
+	statsPool.Put(stats)
+}
+
+type Position struct {
+	// General Stats
+	isAllCalled           bool
+	isReferenceClean      bool
+	isReferenceDuplicated bool
+	isAllPassCoverage     bool
+	isAllPassProportion   bool
+	isAllPassConsensus    bool
+	isAllQualityBreadth   bool
+	isBestSnp             bool
+	isMissingMatrix       bool
+
+	//all_sample_stats=all_sample_stats,
+
+	// Missing Data Matrix condition - at least one SampleAnalysis passes quality_breadth and is a SNP.
+	//is_missing_matrix=is_missing_matrix,
+
+	// NASP Master Matrix
+	// Counters
+	wasCalled        int
+	calledReference  int
+	calledSnp        int
+	calledDegen      int
+	passedCoverage   int
+	passedProportion int
+	a                int
+	c                int
+	g                int
+	t                int
+	n                int
+
+	// Strings
+	callStr []byte
+	// TODO
+	//maskedCallStr          []byte
+	callWasMade            []byte
+	passedDepthFilter      []byte
+	passedProportionFilter []byte
+	pattern                []byte
+}
+
+var positionPool = sync.Pool{
+	New: func() interface{} {
+		// +1 for reference
+		numSamples := NUM_SAMPLES + 1
+		return &Position{
+			isAllCalled: true,
+			//isReferenceClean:      true,
+			//isReferenceDuplicated: true,
+			isAllPassCoverage:   true,
+			isAllPassProportion: true,
+			isAllPassConsensus:  true,
+			isAllQualityBreadth: true,
+			isBestSnp:           true,
+			//isMissingMatrix: true,
+
+			callStr: make([]byte, numSamples),
+			// TODO
+			//maskedCallStr:          make([]byte, numSamples),
+			callWasMade:            make([]byte, numSamples),
+			passedDepthFilter:      make([]byte, numSamples),
+			passedProportionFilter: make([]byte, numSamples),
+			pattern:                make([]byte, numSamples),
+		}
+	},
+}
+
+var statsPool = sync.Pool{
+	New: func() interface{} {
+		return make(SampleStats, NUM_SAMPLES)
+	},
 }
 
 type SampleAnalysis interface {
@@ -254,8 +302,12 @@ type SampleAnalyses []SampleAnalysis
 func (s SampleAnalyses) ReadPositions(positions [][]byte) error {
 	for i, analysis := range s {
 		pos, err := analysis.ReadPositions()
-		if err != nil {
+		// FIXME: EOF will be common, but silently ignoring it might not be good either.
+		switch err {
+		default:
 			return err
+		case bufio.ErrBufferFull, io.EOF:
+			break
 		}
 		positions[i] = pos
 	}
