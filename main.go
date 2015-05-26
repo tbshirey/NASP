@@ -29,9 +29,9 @@ func main() {
 
 	defer profile.Start(&profile.Config{
 		//	CPUProfile:   true,
-		MemProfile:   true,
-		BlockProfile: true,
-		ProfilePath:  ".",
+		MemProfile: true,
+		//BlockProfile: true,
+		ProfilePath: ".",
 		//NoShutdownHook: true,
 	}).Stop()
 
@@ -62,11 +62,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ch := make(chan *Position, 500)
+	ch := make(chan *Position, 100)
+	defer func() {
+		wg.Add(1)
+		close(ch)
+		wg.Wait()
+	}()
 	go func(c chan *Position) {
-		for position := range c {
-			positionPool.Put(position)
-		}
+		defer wg.Done()
+		/*
+			for position := range c {
+				fmt.Printf("%s\n\n", position.callStr)
+			}
+		*/
+		writeMaster(c, NUM_SAMPLES)
 	}(ch)
 
 	//	var err error
@@ -106,10 +115,8 @@ func main() {
 			fmt.Printf("len(ref) = %d\n", len(ref))
 			wg.Add(1)
 			go analyzePositions(ch, ref, dup, pos)
-			//fmt.Printf("%s %s", ref, dup)
 		}
-		//close(contigsCh)
-		fmt.Println("NumGoroutine", runtime.NumGoroutine())
+		//fmt.Println("NumGoroutine", runtime.NumGoroutine())
 	}
 	wg.Wait()
 }
@@ -122,6 +129,7 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 		fmt.Println("Shutdown NumGoroutine", runtime.NumGoroutine())
 		wg.Done()
 	}()
+	var call byte
 	stats := statsPool.Get().(SampleStats)
 	for i, refCall := range ref {
 		position := positionPool.Get().(*Position)
@@ -137,13 +145,31 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 
 		position.isReferenceDuplicated = dup != nil && dup[i] == '1'
 
-		for j, analysis := range analyses {
-			if analysis == nil || len(analysis) < i+1 {
-				position.isAllCalled = false
-				position.callStr[j+1] = 'X'
-				continue
+		for j := range analyses {
+			if analyses[j] == nil || len(analyses[j]) < i+1 {
+				//position.isAllCalled = false
+				//position.callStr[(j+1)<<1-1] = '\t'
+				//position.callStr[(j+1)<<1] = 'X'
+				//continue
+				call = 'X'
+			} else {
+				defer func(j, i, l int, analysis []byte) {
+					if recover() != nil {
+						/*
+							fmt.Printf("QUOX: %s\n", analysis)
+							fmt.Println("BAZQUOX", analysis)
+							fmt.Println("FOOBAR:", j, i, l)
+							fmt.Println("QUOXX", analyses[j][i])
+							os.Exit(1)
+						*/
+					}
+				}(j, i, len(analyses[j]), analyses[j])
+				//fmt.Println(j, i, len(analyses[j]))
+				call = analyses[j][i]
+				//call = 'Z'
 			}
-			position.callStr[j+1] = analysis[i]
+			position.callStr[2*(j+1)-1] = '\t'
+			position.callStr[2*(j+1)] = call
 
 			// TODO _is_pass_filter
 			stats[j].passedCoverageFilter++
@@ -157,9 +183,10 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 
 			// It can be called anything so long as it was called something
 			// X and N
+			isDegen := false
 			wasCalled := true
 
-			switch analysis[i] {
+			switch call {
 			case 'G':
 				position.g++
 			case 'A':
@@ -172,6 +199,7 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 				wasCalled = false
 				fallthrough
 			default:
+				isDegen = true
 				position.isAllPassConsensus = false
 				position.isAllQualityBreadth = false
 				position.n++
@@ -189,12 +217,12 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 
 			// TODO: is pass cov/prop
 			if wasCalled && position.isReferenceClean {
-				if !wasCalled {
+				if isDegen {
 					position.calledDegen++
 					if !position.isReferenceDuplicated {
 						stats[j].calledDegen++
 					}
-				} else if refCall == analysis[i] {
+				} else if refCall == call {
 					position.calledReference++
 					if !position.isReferenceDuplicated {
 						stats[j].calledReference++
@@ -259,6 +287,7 @@ var positionPool = sync.Pool{
 	New: func() interface{} {
 		// +1 for reference
 		numSamples := NUM_SAMPLES + 1
+		//position := &Position{
 		return &Position{
 			isAllCalled: true,
 			//isReferenceClean:      true,
@@ -270,7 +299,9 @@ var positionPool = sync.Pool{
 			isBestSnp:           true,
 			//isMissingMatrix: true,
 
-			callStr: make([]byte, numSamples),
+			// 2*(NUM_SAMPLES + reference) - 1
+			// allows space for a \t between each call
+			callStr: make([]byte, 2*(NUM_SAMPLES)+1),
 			// TODO
 			//maskedCallStr:          make([]byte, numSamples),
 			callWasMade:            make([]byte, numSamples),
@@ -278,6 +309,12 @@ var positionPool = sync.Pool{
 			passedProportionFilter: make([]byte, numSamples),
 			pattern:                make([]byte, numSamples),
 		}
+		/*
+			for i := 1; i < len(position.callStr)-1; i += 2 {
+				position.callStr[i] = '\t'
+			}
+			return position
+		*/
 	},
 }
 
