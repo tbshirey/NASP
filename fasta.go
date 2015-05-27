@@ -159,22 +159,24 @@ func (f *Fasta) NextContig() (name string, err error) {
 // ReadPositions returns the next `n` positions or nil when the contig is
 // exhausted. `n` can be any arbitrary buffer size.
 func (f Fasta) ReadPositions(n int) ([]byte, error) {
+	var line, peek []byte
+	var err error
 	if f.isPrefix {
 		for f.buf.Len() < n {
-			line, _, err := f.br.ReadLine()
+			line, _, err = f.br.ReadLine()
 			if err != nil {
 				line = nil
 				break
 			}
-			if peek, _ := f.br.Peek(1); peek[0] == '>' {
+			if peek, err = f.br.Peek(1); err != nil || peek[0] == '>' {
 				f.isPrefix = false
 				break
 			}
 			// err is always nil
-			f.buf.Write(bytes.ToUpper(line))
+			f.buf.Write(line)
 		}
 	}
-	return f.buf.Next(n), nil
+	return f.buf.Next(n), err
 }
 
 // SeekContig moves the

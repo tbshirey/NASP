@@ -84,7 +84,6 @@ func main() {
 	var name string
 	var ref, dup []byte
 	var isPrefix bool
-	pos := make([][]byte, NUM_SAMPLES)
 	for {
 		name, err = reference.NextContig()
 		if err == io.EOF {
@@ -102,6 +101,7 @@ func main() {
 
 		isPrefix = true
 		for isPrefix {
+			pos := callsPool.Get().([][]byte)
 			ref, dup, isPrefix, err = reference.ReadPositions(defaultBufSize)
 			if err == io.EOF {
 				break
@@ -115,10 +115,14 @@ func main() {
 				log.Println("Scanning...", name, time.Now().Sub(t0))
 			}
 			fmt.Printf("len(ref) = %d\n", len(ref))
-			wg.Add(1)
 			c := make(chan *Position, 1000)
 			ch <- c
-			go analyzePositions(c, ref, dup, pos)
+
+			r := make([]byte, len(ref)+len(dup))
+			copy(r, ref)
+			copy(r[len(ref):], dup)
+
+			go analyzePositions(c, r[:len(ref)], r[len(ref):], pos)
 		}
 		//fmt.Println("NumGoroutine", runtime.NumGoroutine())
 	}
@@ -131,12 +135,13 @@ var wg sync.WaitGroup
 func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 	defer func() {
 		fmt.Println("Shutdown NumGoroutine", runtime.NumGoroutine())
-		wg.Done()
 		close(ch)
 	}()
+
 	var call byte
 	stats := statsPool.Get().(SampleStats)
-	for i, refCall := range ref {
+	for i := range ref {
+		refCall := ToUpper(ref[i])
 		position := positionPool.Get().(*Position)
 
 		switch refCall {
@@ -148,7 +153,7 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 		}
 		position.callStr[0] = refCall
 
-		position.isReferenceDuplicated = dup != nil && dup[i] == '1'
+		position.isReferenceDuplicated = len(dup) > 0 && dup[i] == '1'
 
 		for j := range analyses {
 			if analyses[j] == nil || len(analyses[j]) < i+1 {
@@ -159,18 +164,18 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 				call = 'X'
 			} else {
 				defer func(j, i, l int, analysis []byte) {
-					if recover() != nil {
-						/*
-							fmt.Printf("QUOX: %s\n", analysis)
-							fmt.Println("BAZQUOX", analysis)
-							fmt.Println("FOOBAR:", j, i, l)
-							fmt.Println("QUOXX", analyses[j][i])
-							os.Exit(1)
-						*/
-					}
+					/*
+						if recover() != nil {
+								fmt.Printf("QUOX: %s\n", analysis)
+								fmt.Println("BAZQUOX", analysis)
+								fmt.Println("FOOBAR:", j, i, l)
+								fmt.Println("QUOXX", analyses[j][i])
+								os.Exit(1)
+						}
+					*/
 				}(j, i, len(analyses[j]), analyses[j])
 				//fmt.Println(j, i, len(analyses[j]))
-				call = analyses[j][i]
+				call = ToUpper(analyses[j][i])
 				//call = 'Z'
 			}
 			position.callStr[2*(j+1)-1] = '\t'
@@ -204,10 +209,10 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 				wasCalled = false
 				fallthrough
 			default:
+				position.n++
 				isDegen = true
 				position.isAllPassConsensus = false
 				position.isAllQualityBreadth = false
-				position.n++
 			}
 
 			if wasCalled {
@@ -244,89 +249,8 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 		}
 		ch <- position
 	}
+	callsPool.Put(analyses)
 	statsPool.Put(stats)
-}
-
-type Position struct {
-	// General Stats
-	isAllCalled           bool
-	isReferenceClean      bool
-	isReferenceDuplicated bool
-	isAllPassCoverage     bool
-	isAllPassProportion   bool
-	isAllPassConsensus    bool
-	isAllQualityBreadth   bool
-	isBestSnp             bool
-	isMissingMatrix       bool
-
-	//all_sample_stats=all_sample_stats,
-
-	// Missing Data Matrix condition - at least one SampleAnalysis passes quality_breadth and is a SNP.
-	//is_missing_matrix=is_missing_matrix,
-
-	// NASP Master Matrix
-	// Counters
-	wasCalled        int
-	calledReference  int
-	calledSnp        int
-	calledDegen      int
-	passedCoverage   int
-	passedProportion int
-	a                int
-	c                int
-	g                int
-	t                int
-	n                int
-
-	// Strings
-	callStr []byte
-	// TODO
-	//maskedCallStr          []byte
-	callWasMade            []byte
-	passedDepthFilter      []byte
-	passedProportionFilter []byte
-	pattern                []byte
-}
-
-var positionPool = sync.Pool{
-	New: func() interface{} {
-		// +1 for reference
-		numSamples := NUM_SAMPLES + 1
-		//position := &Position{
-		return &Position{
-			isAllCalled: true,
-			//isReferenceClean:      true,
-			//isReferenceDuplicated: true,
-			isAllPassCoverage:   true,
-			isAllPassProportion: true,
-			isAllPassConsensus:  true,
-			isAllQualityBreadth: true,
-			isBestSnp:           true,
-			//isMissingMatrix: true,
-
-			// 2*(NUM_SAMPLES + reference) - 1
-			// allows space for a \t between each call
-			callStr: make([]byte, 2*(NUM_SAMPLES)+1),
-			// TODO
-			//maskedCallStr:          make([]byte, numSamples),
-			callWasMade:            make([]byte, numSamples),
-			passedDepthFilter:      make([]byte, numSamples),
-			passedProportionFilter: make([]byte, numSamples),
-			pattern:                make([]byte, numSamples),
-		}
-		/*
-			for i := 1; i < len(position.callStr)-1; i += 2 {
-				position.callStr[i] = '\t'
-			}
-			return position
-		*/
-	},
-}
-
-var statsPool = sync.Pool{
-	New: func() interface{} {
-		return make(SampleStats, NUM_SAMPLES)
-	},
 }
 
 type SampleAnalysis interface {
@@ -413,4 +337,11 @@ func NewSampleAnalyses(filepaths ...string) SampleAnalyses {
 	}
 
 	return analyses
+}
+
+func ToUpper(b byte) byte {
+	if 'a' <= b && b <= 'z' {
+		b -= 'a' - 'A'
+	}
+	return b
 }
