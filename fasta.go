@@ -64,13 +64,13 @@ func (r Reference) NextContig() (string, error) {
 	return rname, rerr
 }
 
-func (r Reference) ReadPositions() (ref, dup []byte, isPrefix bool, rerr error) {
+func (r Reference) ReadPositions(n int) (ref, dup []byte, isPrefix bool, rerr error) {
 	var derr error
 
-	ref, rerr = r.ref.ReadPositions()
+	ref, rerr = r.ref.ReadPositions(n)
 
 	if r.dup != nil {
-		dup, derr = r.dup.ReadPositions()
+		dup, derr = r.dup.ReadPositions(n)
 
 		if derr != nil || derr != rerr {
 			return nil, nil, false, fmt.Errorf("duplicates file: %s reference file: %s\n", derr.Error(), rerr.Error())
@@ -87,11 +87,12 @@ type Fasta struct {
 	//path string
 	// TODO: aligner string
 	// index maps contigName -> filePosition of the first position in each contig.
-	name  string
-	index map[string]int64
-	rd    *os.File
-	br    *bufio.Reader
-	buf   *bytes.Buffer
+	name     string
+	index    map[string]int64
+	rd       *os.File
+	br       *bufio.Reader
+	isPrefix bool
+	buf      *bytes.Buffer
 }
 
 func NewFasta(path string, indexContigs bool) (*Fasta, error) {
@@ -113,56 +114,9 @@ func NewFasta(path string, indexContigs bool) (*Fasta, error) {
 		fasta.index = make(map[string]int64)
 		fasta.indexContigs()
 	}
+
 	return fasta, nil
 }
-
-/*
-func (f Fasta) Contig(done chan struct{}, name string) chan byte {
-	ch := make(chan byte, 100)
-	go func(done chan struct{}, ch chan byte) {
-		defer close(ch)
-		var err error
-		var b byte
-		var r rune
-
-		filePosition, ok := f.index[name]
-		if !ok {
-			return
-		}
-
-		if _, err = f.rd.Seek(int64(filePosition), os.SEEK_SET); err != nil {
-			log.Fatal(err)
-			//return err
-		}
-
-		f.br.Reset(f.rd)
-		for err != io.EOF {
-			b, err = f.br.ReadByte()
-			if err != nil && err != io.EOF {
-				log.Fatal(err)
-				//return err
-			}
-			r = rune(b)
-			switch {
-			case unicode.IsSpace(r):
-				continue
-			case r == '>':
-				f.br.UnreadByte()
-				//return nil
-				return
-			}
-
-			select {
-			case <-done:
-				return
-			case ch <- byte(unicode.ToUpper(r)):
-			}
-		}
-	}(done, ch)
-
-	return ch
-}
-*/
 
 func (f Fasta) Name() string {
 	return f.name
@@ -176,7 +130,8 @@ func (f Fasta) Name() string {
  * >frankenfasta::name description
  * gatc...
  */
-func (f Fasta) NextContig() (name string, err error) {
+func (f *Fasta) NextContig() (name string, err error) {
+	f.isPrefix = true
 	var line []byte
 	for {
 		line, err = f.br.ReadSlice('>')
@@ -201,32 +156,44 @@ func (f Fasta) NextContig() (name string, err error) {
 	}
 }
 
-func (f Fasta) ReadPositions() ([]byte, error) {
-	return f.br.ReadSlice('>')
+// ReadPositions returns the next `n` positions or nil when the contig is
+// exhausted. `n` can be any arbitrary buffer size.
+func (f Fasta) ReadPositions(n int) ([]byte, error) {
+	if f.isPrefix {
+		for f.buf.Len() < n {
+			line, _, err := f.br.ReadLine()
+			if err != nil {
+				line = nil
+				break
+			}
+			if peek, _ := f.br.Peek(1); peek[0] == '>' {
+				f.isPrefix = false
+				break
+			}
+			// err is always nil
+			f.buf.Write(bytes.ToUpper(line))
+		}
+	}
+	return f.buf.Next(n), nil
 }
 
-func (f Fasta) SeekContig(name string) error {
+// SeekContig moves the
+func (f *Fasta) SeekContig(name string) (err error) {
 	if filePosition, ok := f.index[name]; ok {
-		_, err := f.rd.Seek(filePosition, os.SEEK_SET)
-		return err
+		// ReadPositions will yield values from the new contig.
+		f.isPrefix = true
+		_, err = f.rd.Seek(filePosition, os.SEEK_SET)
+		// Purge any old data from the previous file position
+		// TODO: The contigs will probably be typically sequential, in which
+		// case it might be efficient to advance the buffers instead of purging
+		// them.
+		f.br.Reset(f.rd)
+		f.buf.Reset()
+	} else {
+		f.isPrefix = false
 	}
-
-	_, err := f.rd.Seek(0, os.SEEK_END)
 	return err
 }
-
-/*
-func (f Fasta) ScanPositions(name string) ([]byte, error) {
-	filePosition, ok := f.index[name]
-	if !ok {
-		return nil, nil
-	}
-	fmt.Printf("Scanning %s at %d\n", name, filePosition)
-	f.rd.Seek(filePosition, os.SEEK_SET)
-	f.br.Reset(f.rd)
-	return f.br.ReadBytes('>')
-}
-*/
 
 /**
  * indexContigs maps the starting file position of each contig in the file.

@@ -15,6 +15,8 @@ import (
 	"github.com/davecheney/profile"
 )
 
+const defaultBufSize = 4096
+
 //var c uint64
 var c_contig uint64
 var refPath = flag.String("reference", "", "Path to the reference fasta against which samples are compared")
@@ -62,7 +64,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ch := make(chan chan *Position, 100)
+	ch := make(chan chan *Position, 200)
 	defer func() {
 		wg.Add(1)
 		close(ch)
@@ -100,13 +102,13 @@ func main() {
 
 		isPrefix = true
 		for isPrefix {
-			ref, dup, isPrefix, err = reference.ReadPositions()
+			ref, dup, isPrefix, err = reference.ReadPositions(defaultBufSize)
 			if err == io.EOF {
 				break
 			} else if err != nil {
 				log.Fatalf("Error scanning reference contig %s: %s", name, err.Error())
 			}
-			if err = analyses.ReadPositions(pos); err != nil {
+			if err = analyses.ReadPositions(pos, defaultBufSize); err != nil {
 				log.Fatalf("Error reading contig %s: %s", name, err.Error())
 			}
 			if isPrefix {
@@ -114,7 +116,7 @@ func main() {
 			}
 			fmt.Printf("len(ref) = %d\n", len(ref))
 			wg.Add(1)
-			c := make(chan *Position, 100)
+			c := make(chan *Position, 1000)
 			ch <- c
 			go analyzePositions(c, ref, dup, pos)
 		}
@@ -332,16 +334,16 @@ type SampleAnalysis interface {
 	//Name() string
 	//ScanPositions(name string) ([]byte, error)
 	SeekContig(name string) error
-	ReadPositions() ([]byte, error)
+	ReadPositions(n int) ([]byte, error)
 }
 
 // SampleAnalyses implements sort.Interface for []SampleAnalysis based on
 // the identifier field.
 type SampleAnalyses []SampleAnalysis
 
-func (s SampleAnalyses) ReadPositions(positions [][]byte) error {
+func (s SampleAnalyses) ReadPositions(positions [][]byte, n int) error {
 	for i, analysis := range s {
-		pos, err := analysis.ReadPositions()
+		pos, err := analysis.ReadPositions(n)
 		// FIXME: EOF will be common, but silently ignoring it might not be good either.
 		switch err {
 		default:

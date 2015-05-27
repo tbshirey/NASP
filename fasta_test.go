@@ -1,12 +1,11 @@
 package main
 
 import (
-	"fmt"
+	"bytes"
 	"io"
 	"io/ioutil"
 	"os"
 	"testing"
-	"time"
 )
 
 func tmpFasta(t *testing.T) *os.File {
@@ -14,7 +13,7 @@ func tmpFasta(t *testing.T) *os.File {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.Write([]byte(">ContigA\nGATC\nABCD\n>ContigB\nCTAGDCBA")); err != nil {
+	if _, err := file.Write([]byte(">ContigA\nGATC\nABCD\r\nefgh\n>ContigB\nCTAGDCBA")); err != nil {
 		t.Fatal(err)
 	}
 	return file
@@ -111,7 +110,7 @@ func TestIndex(t *testing.T) {
 		os.Remove(file.Name())
 	}()
 
-	if _, err := file.Write([]byte(">ContigA\nGATC\nABCD\n>ContigB\nCTAGDCBA")); err != nil {
+	if _, err := file.Write([]byte(">ContigA\nGATC\nABCD\r\nefgh\r\n>ContigB\nCTAGDCBA")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,34 +123,26 @@ func TestIndex(t *testing.T) {
 	defer close(done)
 
 	contigName := "ContigA"
-	c := fasta.Contig(done, contigName)
-	for i, expect := range "GATCABCD" {
-		select {
-		case <-time.After(time.Second):
-			t.Fatalf("timeout: Expected %s position %d expected: %c", contigName, i+1, expect)
-		case actual := <-c:
-			if expect != rune(actual) {
-				t.Fatalf("Expected %s position %d expected: %c actual: %c", contigName, i+1, expect, actual)
-			}
-		}
+	if err = fasta.SeekContig(contigName); err != nil {
+		t.Fatal(err)
 	}
-
+	expect := []byte("GATCABCDEFGH")
+	actual, err := fasta.ReadPositions(4)
+	if !bytes.Equal(expect, actual) {
+		t.Fatalf("%s expected: %s actual: %s", contigName, expect, actual)
+	}
 	// TODO: Expected it yields empty positions when the contig is exhausted
 
 	contigName = "ContigB"
-	c = fasta.Contig(done, contigName)
-	for i, expect := range "CTAGDCBA" {
-		select {
-		case <-time.After(time.Second):
-			t.Fatalf("timeout: Expected %s position %d expected: %c", contigName, i+1, expect)
-		case actual := <-c:
-			if expect != rune(actual) {
-				t.Fatalf("Expected %s position %d expected: %c actual: %c", contigName, i+1, expect, actual)
-			}
-		}
+	if err = fasta.SeekContig(contigName); err != nil {
+		t.Fatal(err)
+	}
+	expect = []byte("CTAGDCBA")
+	actual, err = fasta.ReadPositions(4)
+	if !bytes.Equal(expect, actual) {
+		t.Fatalf("%s expected: %c actual: %c", contigName, expect, actual)
 	}
 
 	// TODO: Expected it yields empty positions when the file is exhausted
 	// until the channel is closed
-	fmt.Println(<-c)
 }
