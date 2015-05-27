@@ -62,13 +62,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ch := make(chan *Position, 100)
+	ch := make(chan chan *Position, 100)
 	defer func() {
 		wg.Add(1)
 		close(ch)
 		wg.Wait()
 	}()
-	go func(c chan *Position) {
+	go func(c chan chan *Position) {
 		defer wg.Done()
 		/*
 			for position := range c {
@@ -114,7 +114,9 @@ func main() {
 			}
 			fmt.Printf("len(ref) = %d\n", len(ref))
 			wg.Add(1)
-			go analyzePositions(ch, ref, dup, pos)
+			c := make(chan *Position, 100)
+			ch <- c
+			go analyzePositions(c, ref, dup, pos)
 		}
 		//fmt.Println("NumGoroutine", runtime.NumGoroutine())
 	}
@@ -128,6 +130,7 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 	defer func() {
 		fmt.Println("Shutdown NumGoroutine", runtime.NumGoroutine())
 		wg.Done()
+		close(ch)
 	}()
 	var call byte
 	stats := statsPool.Get().(SampleStats)
