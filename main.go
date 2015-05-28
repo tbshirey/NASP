@@ -9,13 +9,14 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/davecheney/profile"
 )
 
 const defaultBufSize = 4096
+
+var NUM_SAMPLES int
 
 //var c uint64
 var c_contig uint64
@@ -24,16 +25,15 @@ var dupPath = flag.String("duplicates", "", "Path to the duplicates file marking
 var minCoverage = flag.Int("coverage", 0, "Filter positions below this coverage/depth threshold")
 var minProportion = flag.Float64("proportion", 0.0, "Filter positions below this proportion threshold")
 
-var NUM_SAMPLES int
-
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
+	// Begin Development Profiling
 	defer profile.Start(&profile.Config{
 		//	CPUProfile:   true,
-		MemProfile: true,
-		//BlockProfile: true,
-		ProfilePath: ".",
+		MemProfile:   true,
+		BlockProfile: true,
+		ProfilePath:  ".",
 		//NoShutdownHook: true,
 	}).Stop()
 
@@ -41,6 +41,10 @@ func main() {
 	defer func() {
 		fmt.Println(time.Now().Sub(t0))
 	}()
+	// End Development Profiling
+
+	//	var wg sync.WaitGroup
+	//	defer wg.Wait()
 
 	flag.Parse()
 
@@ -64,21 +68,30 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ch := make(chan chan *Position, 200)
+	done := make(chan bool)
+	ch := make(chan chan []*Position, 100)
 	defer func() {
-		wg.Add(1)
+		//wg.Add(1)
 		close(ch)
-		wg.Wait()
+		<-done
 	}()
-	go func(c chan chan *Position) {
-		defer wg.Done()
+	go func(c chan chan []*Position) {
+		//defer wg.Done()
 		/*
 			for position := range c {
 				fmt.Printf("%s\n\n", position.callStr)
 			}
 		*/
 		writeMaster(c, NUM_SAMPLES)
+		done <- true
 	}(ch)
+
+	/*
+		go func(c chan ) {
+			defer wg.Done()
+			writeStats(c)
+		}
+	*/
 
 	//	var err error
 	var name string
@@ -114,8 +127,9 @@ func main() {
 			if isPrefix {
 				log.Println("Scanning...", name, time.Now().Sub(t0))
 			}
-			fmt.Printf("len(ref) = %d\n", len(ref))
-			c := make(chan *Position, 1000)
+			//fmt.Printf("len(ref) = %d\n", len(ref))
+
+			c := make(chan []*Position, 1)
 			ch <- c
 
 			r := make([]byte, len(ref)+len(dup))
@@ -126,13 +140,11 @@ func main() {
 		}
 		//fmt.Println("NumGoroutine", runtime.NumGoroutine())
 	}
-	wg.Wait()
+	//wg.Wait()
 }
 
-var wg sync.WaitGroup
-
 // Assumes all positions are uppercase
-func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
+func analyzePositions(ch chan []*Position, ref, dup []byte, analyses [][]byte) {
 	defer func() {
 		fmt.Println("Shutdown NumGoroutine", runtime.NumGoroutine())
 		close(ch)
@@ -140,6 +152,8 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 
 	var call byte
 	stats := statsPool.Get().(SampleStats)
+	positions := positionsPool.Get().([]*Position)[:len(ref)]
+
 	for i := range ref {
 		refCall := ToUpper(ref[i])
 		position := positionPool.Get().(*Position)
@@ -157,26 +171,9 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 
 		for j := range analyses {
 			if analyses[j] == nil || len(analyses[j]) < i+1 {
-				//position.isAllCalled = false
-				//position.callStr[(j+1)<<1-1] = '\t'
-				//position.callStr[(j+1)<<1] = 'X'
-				//continue
 				call = 'X'
 			} else {
-				defer func(j, i, l int, analysis []byte) {
-					/*
-						if recover() != nil {
-								fmt.Printf("QUOX: %s\n", analysis)
-								fmt.Println("BAZQUOX", analysis)
-								fmt.Println("FOOBAR:", j, i, l)
-								fmt.Println("QUOXX", analyses[j][i])
-								os.Exit(1)
-						}
-					*/
-				}(j, i, len(analyses[j]), analyses[j])
-				//fmt.Println(j, i, len(analyses[j]))
 				call = ToUpper(analyses[j][i])
-				//call = 'Z'
 			}
 			position.callStr[2*(j+1)-1] = '\t'
 			position.callStr[2*(j+1)] = call
@@ -247,8 +244,10 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 				position.isAllQualityBreadth = false
 			}
 		}
-		ch <- position
+		positions[i] = position
+		//ch <- position
 	}
+	ch <- positions
 	callsPool.Put(analyses)
 	statsPool.Put(stats)
 }
@@ -256,7 +255,6 @@ func analyzePositions(ch chan *Position, ref, dup []byte, analyses [][]byte) {
 type SampleAnalysis interface {
 	//Contig(done chan struct{}, name string) chan byte
 	//Name() string
-	//ScanPositions(name string) ([]byte, error)
 	SeekContig(name string) error
 	ReadPositions(n int) ([]byte, error)
 }
@@ -274,8 +272,9 @@ func (s SampleAnalyses) ReadPositions(positions [][]byte, n int) error {
 			return err
 		case bufio.ErrBufferFull, io.EOF:
 			break
+		case nil:
+			positions[i] = pos
 		}
-		positions[i] = pos
 	}
 	return nil
 }
@@ -339,6 +338,11 @@ func NewSampleAnalyses(filepaths ...string) SampleAnalyses {
 	return analyses
 }
 
+/**
+ * ToUpper is reduced from the standard library version which includes unicode
+ * support and consequently additional memory allocations.
+ * It promotes an ASCII byte to uppercase.
+ */
 func ToUpper(b byte) byte {
 	if 'a' <= b && b <= 'z' {
 		b -= 'a' - 'A'
