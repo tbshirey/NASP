@@ -9,12 +9,18 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/davecheney/profile"
 )
 
-const defaultBufSize = 4096
+const (
+	// defaultBufSize is the maximum number of calls read from a contig at a time.
+	// defaultBufSize * numFiles * maxQueuedBlocks roughly translates to RAM usage.
+	defaultBufSize  = 4096
+	maxQueuedBlocks = 20
+)
 
 var NUM_SAMPLES int
 
@@ -26,6 +32,7 @@ var minCoverage = flag.Int("coverage", 0, "Filter positions below this coverage/
 var minProportion = flag.Float64("proportion", 0.0, "Filter positions below this proportion threshold")
 
 func main() {
+	var wg sync.WaitGroup
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	// Begin Development Profiling
@@ -58,35 +65,41 @@ func main() {
 	}
 
 	analyses := NewSampleAnalyses(flag.Args()...)
+	log.Println("Samples indexed", time.Now().Sub(t0))
 
 	NUM_SAMPLES = len(analyses)
-
-	log.Println("Indexing all samples", time.Now().Sub(t0))
 
 	reference, err := NewReference(*refPath, *dupPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	done := make(chan bool)
-	ch := make(chan chan []*Position, 50)
+	// Queue limits the rate positions are read from the files and ensures the
+	// chunks are assembled in the correct order.
+	queue := make(chan Chunk, maxQueuedBlocks)
+	statsCh := make(chan SampleStats, maxQueuedBlocks)
 	defer func() {
-		close(ch)
-		<-done
+		close(queue)
+		close(statsCh)
+		wg.Wait()
 	}()
-	go func(c chan chan []*Position) {
-		writeMaster(c, NUM_SAMPLES)
-		done <- true
-	}(ch)
 
-	/*
-		go func(c chan ) {
-			defer wg.Done()
-			writeStats(c)
-		}
-	*/
+	wg.Add(1)
+	go func(queue chan Chunk) {
+		defer wg.Done()
+		// queue must be closed to exit
+		writeMaster(queue, NUM_SAMPLES)
+	}(queue)
 
-	//	var err error
+	wg.Add(1)
+	go func(statsCh chan SampleStats) {
+		defer wg.Done()
+		// statsCh must be closed to exit
+		stats := make(SampleStats, NUM_SAMPLES)
+		stats.Aggregate(statsCh)
+	}(statsCh)
+
+	// Read positions from the reference and sample files
 	var name string
 	var ref, dup []byte
 	var isPrefix bool
@@ -120,20 +133,26 @@ func main() {
 			if isPrefix {
 				log.Println("Scanning...", name, time.Now().Sub(t0))
 			}
-			//fmt.Printf("len(ref) = %d\n", len(ref))
 
-			c := make(chan []*Position, 1)
-			ch <- c
+			chunk := Chunk{
+				contigName:    name,
+				positionsChan: make(chan []*Position, 1),
+			}
+
+			queue <- chunk
 
 			r := make([]byte, len(ref)+len(dup))
 			copy(r, ref)
 			copy(r[len(ref):], dup)
 
-			go analyzePositions(c, r[:len(ref)], r[len(ref):], pos)
+			go analyzePositions(chunk.positionsChan, r[:len(ref)], r[len(ref):], pos)
 		}
-		//fmt.Println("NumGoroutine", runtime.NumGoroutine())
 	}
-	//wg.Wait()
+}
+
+type Chunk struct {
+	contigName    string
+	positionsChan chan []*Position
 }
 
 // Assumes all positions are uppercase
