@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 )
 
 var (
@@ -43,8 +44,7 @@ func writeMaster(ch chan chan []*Position, numSamples int) {
 	interruptChan := make(chan os.Signal, 1)
 	signal.Notify(interruptChan, os.Interrupt)
 
-	//var buf bytes.Buffer
-	file, err := os.Create("master.tsv.gz")
+	file, err := os.Create("master.tsv")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -70,6 +70,7 @@ func writeMaster(ch chan chan []*Position, numSamples int) {
 	if _, err := buf.Write([]byte("LocusID\tReference\t#SNPcall\t#Indelcall\t#Refcall\t#CallWasMade\t#PassedDepthFilter\t#PassedProportionFilter\t#A\t#C\t#G\t#T\t#Indel\t#NXdegen\tContig\tPosition\tInDupRegion\tSampleConsensus\tCallWasMade\tPassedDepthFilter\tPassedProportionFilter\tPattern\n")); err != nil {
 		log.Fatal(err)
 	}
+	numberColumns := make([]byte, 0, 100)
 	for {
 		select {
 		case positions, ok := <-ch:
@@ -87,7 +88,25 @@ func writeMaster(ch chan chan []*Position, numSamples int) {
 					}
 				*/
 
-				buf.Write(position.callStr)
+				for _, call := range position.callStr {
+					buf.WriteByte(call)
+					buf.WriteByte('\t')
+				}
+
+				numberColumns = numberColumns[:0]
+				strconv.AppendInt(numberColumns, int64(position.a), 10)
+				numberColumns = append(numberColumns, '\t')
+				strconv.AppendInt(numberColumns, int64(position.c), 10)
+				numberColumns = append(numberColumns, '\t')
+				strconv.AppendInt(numberColumns, int64(position.g), 10)
+				numberColumns = append(numberColumns, '\t')
+				strconv.AppendInt(numberColumns, int64(position.t), 10)
+				numberColumns = append(numberColumns, '\t')
+
+				buf.Write(numberColumns)
+
+				//buf.Write(position.callStr)
+				//fmt.Fprintf(buf, "%d\t%d\t%d\t%d", position.a, position.c, position.g, position.g)
 				buf.Write(position.callWasMade)
 				//buf.Write(TAB)
 				buf.WriteByte('\t')

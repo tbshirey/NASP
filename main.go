@@ -69,19 +69,12 @@ func main() {
 	}
 
 	done := make(chan bool)
-	ch := make(chan chan []*Position, 100)
+	ch := make(chan chan []*Position, 50)
 	defer func() {
-		//wg.Add(1)
 		close(ch)
 		<-done
 	}()
 	go func(c chan chan []*Position) {
-		//defer wg.Done()
-		/*
-			for position := range c {
-				fmt.Printf("%s\n\n", position.callStr)
-			}
-		*/
 		writeMaster(c, NUM_SAMPLES)
 		done <- true
 	}(ch)
@@ -175,8 +168,9 @@ func analyzePositions(ch chan []*Position, ref, dup []byte, analyses [][]byte) {
 			} else {
 				call = ToUpper(analyses[j][i])
 			}
-			position.callStr[2*(j+1)-1] = '\t'
-			position.callStr[2*(j+1)] = call
+			//position.callStr[2*(j+1)-1] = '\t'
+			//position.callStr[2*(j+1)] = call
+			position.callStr[j+1] = call
 
 			// TODO _is_pass_filter
 			stats[j].passedCoverageFilter++
