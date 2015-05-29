@@ -126,8 +126,13 @@ func TestIndex(t *testing.T) {
 	if err = fasta.SeekContig(contigName); err != nil {
 		t.Fatal(err)
 	}
-	expect := []byte("GATCABCDEFGH")
+	expect := []byte("GATC")
 	actual, err := fasta.ReadPositions(4)
+	if !bytes.Equal(expect, actual) {
+		t.Fatalf("%s expected: %s actual: %s", contigName, expect, actual)
+	}
+	expect = []byte("ABCDefgh")
+	actual, err = fasta.ReadPositions(8)
 	if !bytes.Equal(expect, actual) {
 		t.Fatalf("%s expected: %s actual: %s", contigName, expect, actual)
 	}
@@ -138,7 +143,7 @@ func TestIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect = []byte("CTAGDCBA")
-	actual, err = fasta.ReadPositions(4)
+	actual, err = fasta.ReadPositions(8)
 	if !bytes.Equal(expect, actual) {
 		t.Fatalf("%s expected: %c actual: %c", contigName, expect, actual)
 	}

@@ -21,7 +21,7 @@ func NewReference(refPath, dupPath string) (*Reference, error) {
 
 	ref, err = NewFasta(refPath, false)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %s", err.Error(), dupPath)
+		return nil, fmt.Errorf("%s: %s", err.Error(), refPath)
 	}
 
 	if dupPath != "" {
@@ -162,20 +162,21 @@ func (f *Fasta) NextContig() (name string, err error) {
 	}
 }
 
+// TODO: Indexing detect consecutive contig descriptions
+
 // ReadPositions returns the next `n` positions or nil when the contig is
 // exhausted. `n` can be any arbitrary buffer size.
-func (f Fasta) ReadPositions(n int) ([]byte, error) {
+func (f *Fasta) ReadPositions(n int) ([]byte, error) {
 	var line, peek []byte
 	var err error
 	if f.isPrefix {
 		for f.buf.Len() < n {
-			line, _, err = f.br.ReadLine()
-			if err != nil {
-				line = nil
-				break
-			}
 			if peek, err = f.br.Peek(1); err != nil || peek[0] == '>' {
 				f.isPrefix = false
+				break
+			}
+			if line, _, err = f.br.ReadLine(); err != nil {
+				line = nil
 				break
 			}
 			// err is always nil
