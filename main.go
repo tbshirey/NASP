@@ -160,6 +160,8 @@ func readPositions(queue chan Chunk, statsChan chan SampleStats, reference *Refe
 }
 
 // TODO: rename ch to positionsChan
+// Get 1 statsPool, 1 positionsPool, maxBufSize positionPool
+// Put 1 callsPool
 func analyzePositions(ch chan []*Position, statsChan chan SampleStats, ref, dup []byte, analyses [][]byte) {
 	defer func() {
 		fmt.Println("Shutdown NumGoroutine", runtime.NumGoroutine())
@@ -168,6 +170,8 @@ func analyzePositions(ch chan []*Position, statsChan chan SampleStats, ref, dup 
 
 	var call byte
 	stats := statsPool.Get().(SampleStats)
+	// Clear old values if this is a recycled object.
+	stats.Reset()
 	positions := positionsPool.Get().([]*Position)[:len(ref)]
 
 	for i := range ref {
@@ -277,6 +281,8 @@ type SampleAnalysis interface {
 // the identifier field.
 type SampleAnalyses []SampleAnalysis
 
+// Get 1 callsPool
+// TODO: struct { calls, cov, prop }
 func (s SampleAnalyses) ReadPositions(n int) ([][]byte, error) {
 	positions := callsPool.Get().([][]byte)
 	for i, analysis := range s {

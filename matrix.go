@@ -64,6 +64,7 @@ func masterMatrixLine(position *Position) {
 
 }
 
+// Put 1 positionsPool, maxBufSize positionPool
 func writeMaster(chunks chan Chunk, numSamples int) {
 	interruptChan := make(chan os.Signal, 1)
 	signal.Notify(interruptChan, os.Interrupt)

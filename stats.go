@@ -141,15 +141,18 @@ func (s SampleStats) Aggregate(ch chan SampleStats /*, filepath string*/) {
 		}
 		statsPool.Put(stats)
 	}
+}
 
-	/*
-		file, err := os.Create("sample_stats.tsv")
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		br := bufio.NewWriter(file)
-	*/
+func (s SampleStats) Reset() {
+	for i := range s {
+		s[i].wasCalled = 0
+		s[i].passedCoverageFilter = 0
+		s[i].passedProportionFilter = 0
+		s[i].qualityBreadth = 0
+		s[i].calledReference = 0
+		s[i].calledSnp = 0
+		s[i].calledDegen = 0
+	}
 }
 
 func (s SampleStats) WriteStats() {
