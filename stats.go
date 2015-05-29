@@ -1,5 +1,12 @@
 package main
 
+import (
+	"bufio"
+	"log"
+	"os"
+	"strconv"
+)
+
 type Contigs struct {
 	Reference  []byte
 	Duplicates []byte
@@ -105,13 +112,13 @@ type SampleStat struct {
 	//name                   string
 	//aligner                string
 	//snpcaller              string
-	wasCalled              int
-	passedCoverageFilter   int
-	passedProportionFilter int
-	qualityBreadth         int
-	calledReference        int
-	calledSnp              int
-	calledDegen            int
+	wasCalled              int64
+	passedCoverageFilter   int64
+	passedProportionFilter int64
+	qualityBreadth         int64
+	calledReference        int64
+	calledSnp              int64
+	calledDegen            int64
 }
 
 type ContigStats []ContigStat
@@ -132,6 +139,7 @@ func (s SampleStats) Aggregate(ch chan SampleStats /*, filepath string*/) {
 			s[i].calledSnp += stats[i].calledSnp
 			s[i].calledDegen += stats[i].calledDegen
 		}
+		statsPool.Put(stats)
 	}
 
 	/*
@@ -142,4 +150,38 @@ func (s SampleStats) Aggregate(ch chan SampleStats /*, filepath string*/) {
 
 		br := bufio.NewWriter(file)
 	*/
+}
+
+func (s SampleStats) WriteStats() {
+	file, err := os.Create("sample_stats.tsv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	bw := bufio.NewWriter(file)
+	bw.Write([]byte("Sample\tSample::Analysis\twas_called\twas_called (%)\tpassed_coverage_filter\tpassed_coverage_filter (%)\tpassed_proportion_filter\tpassed_proportion_filter (%)\tquality_breadth\tquality_breadth (%)\tcalled_reference\tcalled_reference (%)\tcalled_snp\tcalled_snp (%)\tcalled_degen\tcalled_degen (%)\n\n"))
+
+	buf := make([]byte, 100)
+	for _, sample := range s {
+		buf = buf[:0]
+		bw.Write(strconv.AppendInt(buf, sample.wasCalled, 10))
+		bw.WriteByte('\t')
+		buf = buf[:0]
+		bw.Write(strconv.AppendInt(buf, sample.passedCoverageFilter, 10))
+		bw.WriteByte('\t')
+		buf = buf[:0]
+		bw.Write(strconv.AppendInt(buf, sample.passedProportionFilter, 10))
+		bw.WriteByte('\t')
+		buf = buf[:0]
+		bw.Write(strconv.AppendInt(buf, sample.qualityBreadth, 10))
+		bw.WriteByte('\t')
+		buf = buf[:0]
+		bw.Write(strconv.AppendInt(buf, sample.calledReference, 10))
+		bw.WriteByte('\t')
+		buf = buf[:0]
+		bw.Write(strconv.AppendInt(buf, sample.calledSnp, 10))
+		bw.WriteByte('\t')
+		buf = buf[:0]
+		bw.Write(strconv.AppendInt(buf, sample.calledDegen, 10))
+		bw.WriteByte('\n')
+	}
 }

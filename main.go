@@ -19,13 +19,12 @@ const (
 	// defaultBufSize is the maximum number of calls read from a contig at a time.
 	// defaultBufSize * numFiles * maxQueuedBlocks roughly translates to RAM usage.
 	defaultBufSize  = 4096
-	maxQueuedBlocks = 20
+	maxQueuedBlocks = 10
 )
 
 var NUM_SAMPLES int
+var t0 = time.Now()
 
-//var c uint64
-var c_contig uint64
 var refPath = flag.String("reference", "", "Path to the reference fasta against which samples are compared")
 var dupPath = flag.String("duplicates", "", "Path to the duplicates file marking possible duplicated positions")
 var minCoverage = flag.Int("coverage", 0, "Filter positions below this coverage/depth threshold")
@@ -49,9 +48,6 @@ func main() {
 		fmt.Println(time.Now().Sub(t0))
 	}()
 	// End Development Profiling
-
-	//	var wg sync.WaitGroup
-	//	defer wg.Wait()
 
 	flag.Parse()
 
@@ -77,32 +73,46 @@ func main() {
 	// Queue limits the rate positions are read from the files and ensures the
 	// chunks are assembled in the correct order.
 	queue := make(chan Chunk, maxQueuedBlocks)
-	statsCh := make(chan SampleStats, maxQueuedBlocks)
+	statsChan := make(chan SampleStats, maxQueuedBlocks)
 	defer func() {
+		wg.Add(1)
 		close(queue)
-		close(statsCh)
+		wg.Wait()
+		wg.Add(1)
+		close(statsChan)
 		wg.Wait()
 	}()
 
-	wg.Add(1)
 	go func(queue chan Chunk) {
 		defer wg.Done()
 		// queue must be closed to exit
 		writeMaster(queue, NUM_SAMPLES)
 	}(queue)
 
-	wg.Add(1)
-	go func(statsCh chan SampleStats) {
+	go func(statsChan chan SampleStats) {
 		defer wg.Done()
 		// statsCh must be closed to exit
 		stats := make(SampleStats, NUM_SAMPLES)
-		stats.Aggregate(statsCh)
-	}(statsCh)
+		stats.Aggregate(statsChan)
+		stats.WriteStats()
+	}(statsChan)
 
-	// Read positions from the reference and sample files
+	readPositions(queue, statsChan, reference, analyses)
+}
+
+type Chunk struct {
+	contigName    string
+	positionsChan chan []*Position
+}
+
+// Read positions from the reference and sample files
+func readPositions(queue chan Chunk, statsChan chan SampleStats, reference *Reference, analyses SampleAnalyses) {
+	var err error
 	var name string
 	var ref, dup []byte
+	var calls [][]byte
 	var isPrefix bool
+
 	for {
 		name, err = reference.NextContig()
 		if err == io.EOF {
@@ -120,14 +130,17 @@ func main() {
 
 		isPrefix = true
 		for isPrefix {
-			pos := callsPool.Get().([][]byte)
 			ref, dup, isPrefix, err = reference.ReadPositions(defaultBufSize)
 			if err == io.EOF {
 				break
 			} else if err != nil {
 				log.Fatalf("Error scanning reference contig %s: %s", name, err.Error())
 			}
-			if err = analyses.ReadPositions(pos, defaultBufSize); err != nil {
+
+			// TODO: cov / prop [][]bool
+			// calls is a chunk of calls that can be min(remaining sample contig length, defaultBufSize)
+			calls, err = analyses.ReadPositions(defaultBufSize)
+			if err != nil {
 				log.Fatalf("Error reading contig %s: %s", name, err.Error())
 			}
 			if isPrefix {
@@ -141,22 +154,13 @@ func main() {
 
 			queue <- chunk
 
-			r := make([]byte, len(ref)+len(dup))
-			copy(r, ref)
-			copy(r[len(ref):], dup)
-
-			go analyzePositions(chunk.positionsChan, r[:len(ref)], r[len(ref):], pos)
+			go analyzePositions(chunk.positionsChan, statsChan, ref, dup, calls)
 		}
 	}
 }
 
-type Chunk struct {
-	contigName    string
-	positionsChan chan []*Position
-}
-
-// Assumes all positions are uppercase
-func analyzePositions(ch chan []*Position, ref, dup []byte, analyses [][]byte) {
+// TODO: rename ch to positionsChan
+func analyzePositions(ch chan []*Position, statsChan chan SampleStats, ref, dup []byte, analyses [][]byte) {
 	defer func() {
 		fmt.Println("Shutdown NumGoroutine", runtime.NumGoroutine())
 		close(ch)
@@ -196,8 +200,8 @@ func analyzePositions(ch chan []*Position, ref, dup []byte, analyses [][]byte) {
 			stats[j].passedProportionFilter++
 			position.passedCoverage++
 			position.passedProportion++
-			position.passedDepthFilter[j+1] = '-'
-			position.passedProportionFilter[j+1] = '-'
+			position.passedDepthFilter[j] = '-'
+			position.passedProportionFilter[j] = '-'
 
 			// TODO: Sample consensus
 
@@ -252,21 +256,18 @@ func analyzePositions(ch chan []*Position, ref, dup []byte, analyses [][]byte) {
 					position.calledSnp++
 					position.isMissingMatrix = true
 				}
-
 			} else {
 				position.isAllQualityBreadth = false
 			}
 		}
 		positions[i] = position
-		//ch <- position
 	}
-	ch <- positions
 	callsPool.Put(analyses)
-	statsPool.Put(stats)
+	ch <- positions
+	statsChan <- stats
 }
 
 type SampleAnalysis interface {
-	//Contig(done chan struct{}, name string) chan byte
 	//Name() string
 	SeekContig(name string) error
 	ReadPositions(n int) ([]byte, error)
@@ -276,20 +277,23 @@ type SampleAnalysis interface {
 // the identifier field.
 type SampleAnalyses []SampleAnalysis
 
-func (s SampleAnalyses) ReadPositions(positions [][]byte, n int) error {
+func (s SampleAnalyses) ReadPositions(n int) ([][]byte, error) {
+	positions := callsPool.Get().([][]byte)
 	for i, analysis := range s {
 		pos, err := analysis.ReadPositions(n)
 		// FIXME: EOF will be common, but silently ignoring it might not be good either.
 		switch err {
 		default:
-			return err
+			positionsPool.Put(positions)
+			return nil, err
 		case bufio.ErrBufferFull, io.EOF:
 			break
 		case nil:
-			positions[i] = pos
+			positions[i] = positions[i][:len(pos)]
+			copy(positions[i], pos)
 		}
 	}
-	return nil
+	return positions, nil
 }
 
 /**
@@ -328,7 +332,7 @@ func NewSampleAnalyses(filepaths ...string) SampleAnalyses {
 		go func(ch chan SampleAnalysis, path string) {
 			switch {
 			default:
-				log.Fatal("Unknown sample analysis: " + path)
+				log.Fatalf("Unknown sample analysis: %s\n", path)
 			case strings.HasSuffix(path, "fasta"):
 				// NOTE: This will accept any path matching *fasta$
 				// ex: .fasta, .frankenfasta, notReallyAfasta
@@ -353,7 +357,7 @@ func NewSampleAnalyses(filepaths ...string) SampleAnalyses {
 
 /**
  * ToUpper is reduced from the standard library version which includes unicode
- * support and consequently additional memory allocations.
+ * support and consequently additional memory allocation.
  * It promotes an ASCII byte to uppercase.
  */
 func ToUpper(b byte) byte {

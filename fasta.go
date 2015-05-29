@@ -80,7 +80,13 @@ func (r Reference) ReadPositions(n int) (ref, dup []byte, isPrefix bool, rerr er
 	if rerr == bufio.ErrBufferFull {
 		return ref, dup, true, nil
 	}
-	return ref, dup, false, rerr
+
+	// Copy the ref and dup so they may be passed to a goroutine
+	// without triggering a race condition.
+	buf := make([]byte, len(ref)+len(dup))
+	copy(buf[:len(ref)], ref)
+	copy(buf[len(ref):], dup)
+	return buf[:len(ref)], buf[len(ref):], false, rerr
 }
 
 type Fasta struct {
@@ -106,7 +112,7 @@ func NewFasta(path string, indexContigs bool) (*Fasta, error) {
 		name: filepath.Base(path),
 		rd:   file,
 		br:   bufio.NewReader(file),
-		buf:  &bytes.Buffer{},
+		buf:  bytes.NewBuffer(make([]byte, 0, defaultBufSize)),
 	}
 
 	if indexContigs {

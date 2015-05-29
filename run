@@ -2,6 +2,9 @@
 
 ulimit -n 9999 
 
+cp mem.pprof mem.old.pprof
+cp block.pprof block.old.pprof
+
 go build
 if [ $? -ne 0 ]; then
     exit 1
@@ -15,5 +18,10 @@ go tool pprof -alloc_space -svg nasp mem.pprof > alloc_mem.svg
 #go tool pprof -total_delay -contentions -mean_delay -lines -svg nasp block.pprof > block.svg
 go tool pprof -svg nasp block.pprof > block.svg
 
+
+go tool pprof -base mem.old.pprof -svg nasp mem.pprof > inuse_mem.delta.svg
+go tool pprof -base mem.old.pprof -alloc_space -svg nasp mem.pprof > alloc_mem.delta.svg
+
 #open cpu.svg mem.svg block.svg
-open inuse_mem.svg alloc_mem.svg block.svg
+#open inuse_mem.svg alloc_mem.svg block.svg
+#open *.svg

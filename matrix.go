@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -27,9 +28,27 @@ func master(wg sync.WaitGroup, ch chan []byte) {
 	}
 }
 
-func lineDispatcher(ch chan chan []*Position) {
-	for positions := range ch {
-		for _, position := range <-positions {
+type LineBuilder struct {
+	master      bytes.Buffer
+	missingdata bytes.Buffer
+}
+
+func (l LineBuilder) Dispatch(chunk chan Chunk) {
+
+}
+
+func lineDispatcher(chunks chan Chunk) {
+	var prevContigName string
+	var positionNum int64
+
+	for chunk := range chunks {
+		positions := <-chunk.positionsChan
+		for _, position := range positions {
+			if prevContigName != chunk.contigName {
+				positionNum = 0
+			}
+			positionNum++
+
 			select {
 			default:
 				//case masterCh <- buildMasterRow():
@@ -80,17 +99,18 @@ func writeMaster(chunks chan Chunk, numSamples int) {
 
 			for _, position := range positions {
 
+				// Reset the position counter when starting a new contig.
 				if chunk.contigName != prevContigName {
 					positionNum = 0
+					prevContigName = chunk.contigName
 				}
-
 				positionNum++
 
+				// LocusID
 				buf.WriteString(chunk.contigName)
-
 				numberColumns = numberColumns[:0]
 				numberColumns = append(numberColumns, ':', ':')
-				strconv.AppendInt(numberColumns, positionNum, 10)
+				numberColumns = strconv.AppendInt(numberColumns, positionNum, 10)
 				buf.Write(numberColumns)
 				buf.WriteByte('\t')
 
@@ -100,22 +120,29 @@ func writeMaster(chunks chan Chunk, numSamples int) {
 				}
 
 				numberColumns = numberColumns[:0]
-				strconv.AppendInt(numberColumns, int64(position.calledSnp), 10)
+				numberColumns = strconv.AppendInt(numberColumns, int64(position.calledSnp), 10)
 				numberColumns = append(numberColumns, '\t')
 				// #Indelcall
-				strconv.AppendInt(numberColumns, int64(position.calledReference), 10)
+				numberColumns = strconv.AppendInt(numberColumns, int64(position.calledReference), 10)
 				numberColumns = append(numberColumns, '\t')
-				strconv.AppendInt(numberColumns, int64(position.a), 10)
+				numberColumns = strconv.AppendInt(numberColumns, int64(position.a), 10)
 				numberColumns = append(numberColumns, '\t')
-				strconv.AppendInt(numberColumns, int64(position.c), 10)
+				numberColumns = strconv.AppendInt(numberColumns, int64(position.c), 10)
 				numberColumns = append(numberColumns, '\t')
-				strconv.AppendInt(numberColumns, int64(position.g), 10)
+				numberColumns = strconv.AppendInt(numberColumns, int64(position.g), 10)
 				numberColumns = append(numberColumns, '\t')
-				strconv.AppendInt(numberColumns, int64(position.t), 10)
+				numberColumns = strconv.AppendInt(numberColumns, int64(position.t), 10)
 				numberColumns = append(numberColumns, '\t')
-				strconv.AppendInt(numberColumns, int64(position.n), 10)
+				numberColumns = strconv.AppendInt(numberColumns, int64(position.n), 10)
 				numberColumns = append(numberColumns, '\t')
 				buf.Write(numberColumns)
+
+				buf.WriteString(chunk.contigName)
+				buf.WriteByte('\t')
+
+				numberColumns = numberColumns[:0]
+				numberColumns = strconv.AppendInt(numberColumns, int64(positionNum), 10)
+				numberColumns = append(numberColumns, '\t')
 
 				buf.Write(position.callWasMade)
 				buf.WriteByte('\t')
