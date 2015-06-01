@@ -77,16 +77,18 @@ func (r Reference) ReadPositions(n int) (ref, dup []byte, isPrefix bool, rerr er
 		}
 	}
 
-	if rerr == bufio.ErrBufferFull {
-		return ref, dup, true, nil
-	}
+	/*
+		if rerr == bufio.ErrBufferFull {
+			return ref, dup, true, nil
+		}
+	*/
 
 	// Copy the ref and dup so they may be passed to a goroutine
 	// without triggering a race condition.
 	buf := make([]byte, len(ref)+len(dup))
 	copy(buf[:len(ref)], ref)
 	copy(buf[len(ref):], dup)
-	return buf[:len(ref)], buf[len(ref):], false, rerr
+	return buf[:len(ref)], buf[len(ref):], r.ref.isPrefix, rerr
 }
 
 type Fasta struct {
@@ -182,6 +184,9 @@ func (f *Fasta) ReadPositions(n int) ([]byte, error) {
 			// err is always nil
 			f.buf.Write(line)
 		}
+	}
+	if err == io.EOF && f.buf.Len() > 0 {
+		err = nil
 	}
 	return f.buf.Next(n), err
 }

@@ -111,8 +111,12 @@ func readPositions(queue chan Chunk, statsChan chan SampleStats, reference *Refe
 	var name string
 	var ref, dup []byte
 	var calls [][]byte
-	var isPrefix bool
 
+	file, _ := os.Create("foobar.ref")
+	bw := bufio.NewWriter(file)
+	defer bw.Flush()
+
+	var n string
 	for {
 		name, err = reference.NextContig()
 		if err == io.EOF {
@@ -128,10 +132,10 @@ func readPositions(queue chan Chunk, statsChan chan SampleStats, reference *Refe
 
 		log.Println("Scanning", name, time.Now().Sub(t0))
 
-		isPrefix = true
-		for isPrefix {
+		for isPrefix := true; isPrefix; {
 			ref, dup, isPrefix, err = reference.ReadPositions(defaultBufSize)
 			if err == io.EOF {
+				fmt.Printf("EOF: %s\n", ref)
 				break
 			} else if err != nil {
 				log.Fatalf("Error scanning reference contig %s: %s", name, err.Error())
@@ -153,6 +157,15 @@ func readPositions(queue chan Chunk, statsChan chan SampleStats, reference *Refe
 			}
 
 			queue <- chunk
+
+			if n != name {
+				n = name
+				bw.WriteByte('\n')
+				bw.WriteByte('>')
+				bw.WriteString(name)
+				bw.WriteByte('\n')
+			}
+			bw.Write(ref)
 
 			go analyzePositions(chunk.positionsChan, statsChan, ref, dup, calls)
 		}
